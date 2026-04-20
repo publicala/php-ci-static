@@ -8,9 +8,17 @@ Third-party GH Actions runners (Depot, Blacksmith, Namespace, BuildJet) get flag
 
 Context and benchmarks: [publicala/publicanow#7](https://github.com/publicala/publicanow/pull/7).
 
+## Available releases
+
+Sliding tags, updated on every successful build:
+
+- `latest-8.3` → PHP 8.3 series
+- `latest-8.4` → PHP 8.4 series
+- `latest-8.5` → PHP 8.5 series
+
 ## Usage
 
-From any GH Actions job:
+From any GH Actions job (swap `8.4` for your series):
 
 ```yaml
 - name: Install PHP
@@ -30,11 +38,11 @@ Checksum (optional):
 
 ## Build
 
-Manual trigger (`workflow_dispatch`). Runs on `depot-ubuntu-24.04-16` and publishes a sliding release tag `latest-<major>.<minor>`. Each run overwrites the previous release asset.
+Manual trigger (`workflow_dispatch`). Runs a matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16` and publishes sliding tags `latest-<major>.<minor>`. Each run overwrites previous release assets.
 
 ## Scope (POC)
 
-Linux x86_64, PHP 8.4. Extensions tuned for publicanow (Laravel 12, Pest 4, SQLite, Horizon, DomPDF):
+Linux x86_64, PHP 8.3 + 8.4 + 8.5. Extensions tuned for publicanow (Laravel 12, Pest 4, SQLite, Horizon, DomPDF) and shared across all versions:
 
 ```
 bcmath, ctype, curl, dom, fileinfo, filter, gd, iconv, intl, mbstring, opcache, openssl,

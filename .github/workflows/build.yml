@@ -2,23 +2,22 @@ name: Build static PHP
 
 on:
   workflow_dispatch:
-    inputs:
-      php_version:
-        description: 'PHP major.minor (e.g. 8.4)'
-        default: '8.4'
-        required: true
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-${{ inputs.php_version }}
+  group: build
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        php_version: ['8.3', '8.4', '8.5']
     env:
       SPC_EXTENSIONS: bcmath,ctype,curl,dom,fileinfo,filter,gd,iconv,intl,mbstring,opcache,openssl,pcntl,pdo,pdo_sqlite,phar,posix,session,simplexml,sockets,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
     steps:
@@ -39,10 +38,10 @@ jobs:
           path: |
             downloads
             source
-          key: spc-${{ inputs.php_version }}-${{ hashFiles('.github/workflows/build.yml') }}
+          key: spc-${{ matrix.php_version }}-${{ hashFiles('.github/workflows/build.yml') }}
 
       - name: Download sources
-        run: ./spc download --with-php=${{ inputs.php_version }} --for-extensions="$SPC_EXTENSIONS"
+        run: ./spc download --with-php=${{ matrix.php_version }} --for-extensions="$SPC_EXTENSIONS"
 
       - name: Build CLI
         run: ./spc build "$SPC_EXTENSIONS" --build-cli
@@ -69,15 +68,16 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: php-linux-x86_64-${{ steps.ver.outputs.exact }}
+          name: php-${{ matrix.php_version }}-linux-x86_64-${{ steps.ver.outputs.exact }}
           path: dist/
           if-no-files-found: error
 
       - name: Publish sliding release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: latest-${{ inputs.php_version }}
+          TAG: latest-${{ matrix.php_version }}
           EXACT: ${{ steps.ver.outputs.exact }}
+          SERIES: ${{ matrix.php_version }}
         run: |
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
@@ -85,7 +85,7 @@ jobs:
             --title "PHP $EXACT (static, linux x86_64)" \
             --notes "Built by static-php-cli on $(date -u +%FT%TZ)
 
-          PHP: \`$EXACT\`
+          PHP: \`$EXACT\` (series \`$SERIES\`)
           Extensions: \`$SPC_EXTENSIONS\`
           Runner: \`depot-ubuntu-24.04-16\`
           Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
