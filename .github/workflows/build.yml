@@ -1,0 +1,102 @@
+name: Build static PHP
+
+on:
+  workflow_dispatch:
+    inputs:
+      php_version:
+        description: 'PHP major.minor (e.g. 8.4)'
+        default: '8.4'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ inputs.php_version }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: depot-ubuntu-24.04-16
+    timeout-minutes: 60
+    env:
+      SPC_EXTENSIONS: bcmath,ctype,curl,dom,fileinfo,filter,gd,iconv,intl,mbstring,opcache,openssl,pcntl,pdo,pdo_sqlite,phar,posix,session,simplexml,sockets,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install static-php-cli
+        run: |
+          curl -fsSL -o spc https://dl.static-php.dev/static-php-cli/spc-bin/nightly/spc-linux-x86_64
+          chmod +x spc
+          ./spc --version
+
+      - name: Install build dependencies
+        run: ./spc doctor --auto-fix
+
+      - name: Cache spc sources
+        uses: actions/cache@v5
+        with:
+          path: |
+            downloads
+            source
+          key: spc-${{ inputs.php_version }}-${{ hashFiles('.github/workflows/build.yml') }}
+
+      - name: Download sources
+        run: ./spc download --with-php=${{ inputs.php_version }} --for-extensions="$SPC_EXTENSIONS"
+
+      - name: Build CLI
+        run: ./spc build "$SPC_EXTENSIONS" --build-cli
+
+      - name: Verify binary
+        run: |
+          ls -la buildroot/bin/
+          ./buildroot/bin/php -v
+          ./buildroot/bin/php -m
+
+      - name: Capture exact PHP version
+        id: ver
+        run: |
+          exact=$(./buildroot/bin/php -r 'echo PHP_VERSION;')
+          echo "exact=$exact" >> "$GITHUB_OUTPUT"
+          echo "Built PHP $exact"
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp buildroot/bin/php dist/php-linux-x86_64
+          (cd dist && sha256sum php-linux-x86_64 > SHA256SUMS)
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: php-linux-x86_64-${{ steps.ver.outputs.exact }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Publish sliding release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: latest-${{ inputs.php_version }}
+          EXACT: ${{ steps.ver.outputs.exact }}
+        run: |
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" \
+            dist/php-linux-x86_64 dist/SHA256SUMS \
+            --title "PHP $EXACT (static, linux x86_64)" \
+            --notes "Built by static-php-cli on $(date -u +%FT%TZ)
+
+          PHP: \`$EXACT\`
+          Extensions: \`$SPC_EXTENSIONS\`
+          Runner: \`depot-ubuntu-24.04-16\`
+          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ## Usage
+
+          \`\`\`yaml
+          - name: Install PHP
+            run: |
+              curl -fsSL -o php https://github.com/${{ github.repository }}/releases/download/$TAG/php-linux-x86_64
+              chmod +x php
+              sudo mv php /usr/local/bin/php
+              php -v
+          \`\`\`"
