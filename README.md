@@ -42,7 +42,7 @@ The static binary covers the common Laravel CI workload — lint, phpstan, pint,
 
 ### Coverage with pcov (recommended)
 
-10–100× faster than xdebug. Download the shared module and load it via `zend_extension`:
+10–100× faster than xdebug. Download the shared module and load it via `extension` (pcov is a regular PHP extension, not a Zend extension like xdebug):
 
 ```yaml
 - name: Install PHP + pcov
@@ -52,7 +52,7 @@ The static binary covers the common Laravel CI workload — lint, phpstan, pint,
     chmod +x php
     sudo mv php /usr/local/bin/php
 
-- run: php -d zend_extension=$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
+- run: php -d extension=$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
 ```
 
 ### Coverage with xdebug (or step-debugging)

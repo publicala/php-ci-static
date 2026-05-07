@@ -74,18 +74,23 @@ jobs:
 
       - name: Verify static binary
         run: |
+          set -o pipefail
           ls -la buildroot/bin/ buildroot/modules/
           ./buildroot/bin/php -v
           ./buildroot/bin/php -m
           ./buildroot/bin/php -r 'echo "json: ", json_encode(["ok" => true]), PHP_EOL;'
-          ./buildroot/bin/php --ri opcache | head -5
+          ./buildroot/bin/php --ri opcache > /dev/null
 
       - name: Verify shared extensions load
+        # xdebug is a Zend extension; pcov is a regular PHP extension.
+        # Each --ri call exits non-zero if the .so does not register, so
+        # this step fails loudly if either module is broken.
         run: |
-          for ext in xdebug pcov; do
-            echo "--- $ext ---"
-            ./buildroot/bin/php -d "zend_extension=$PWD/buildroot/modules/$ext.so" --ri "$ext" | head -10
-          done
+          set -o pipefail
+          echo "=== xdebug ==="
+          ./buildroot/bin/php -d "zend_extension=$PWD/buildroot/modules/xdebug.so" --ri xdebug
+          echo "=== pcov ==="
+          ./buildroot/bin/php -d "extension=$PWD/buildroot/modules/pcov.so" --ri pcov
 
       - name: Capture exact PHP version
         id: ver
@@ -151,7 +156,7 @@ jobs:
           \`\`\`yaml
           - run: |
               curl -fsSL -o pcov.so https://github.com/${{ github.repository }}/releases/download/$TAG/pcov-linux-x86_64.so
-              php -d zend_extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
+              php -d extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
           \`\`\`
 
           Coverage with xdebug (or step-debugging):
