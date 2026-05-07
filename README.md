@@ -16,17 +16,20 @@ Sliding tags, refreshed on every successful build:
 - `latest-8.4` → PHP 8.4 series
 - `latest-8.5` → PHP 8.5 series
 
-Each release publishes two assets plus a checksum file:
+Each release publishes three assets plus a checksum file:
 
-- `php-linux-x86_64` — static PHP CLI binary, all extensions baked in (no xdebug)
-- `xdebug-linux-x86_64.so` — xdebug Zend extension as a shared module, opt-in
-- `SHA256SUMS` — checksums for both
+- `php-linux-x86_64` — static PHP CLI binary, all extensions baked in
+- `pcov-linux-x86_64.so` — fast coverage driver, opt-in
+- `xdebug-linux-x86_64.so` — xdebug Zend extension, opt-in
+- `SHA256SUMS` — checksums for all three
+
+pcov and xdebug are shared-only in static-php-cli, so they ship as separate `.so` files. Both are zero-cost when not loaded.
 
 ## Usage
 
-### Default (no xdebug, fastest)
+### Default (no coverage, fastest)
 
-The static binary covers the common Laravel CI workload — lint, phpstan, pint, tests against MySQL / Postgres / SQLite / Redis. JIT is on. pcov is baked in (disabled by default, zero overhead).
+The static binary covers the common Laravel CI workload — lint, phpstan, pint, tests against MySQL / Postgres / SQLite / Redis. JIT is on. No coverage driver loaded.
 
 ```yaml
 - name: Install PHP
@@ -39,15 +42,20 @@ The static binary covers the common Laravel CI workload — lint, phpstan, pint,
 
 ### Coverage with pcov (recommended)
 
-10–100× faster than xdebug. Enable inline:
+10–100× faster than xdebug. Download the shared module and load it via `zend_extension`:
 
 ```yaml
-- run: php -d pcov.enabled=1 vendor/bin/pest --coverage
+- name: Install PHP + pcov
+  run: |
+    curl -fsSL -o php https://github.com/publicala/php-ci-static/releases/download/latest-8.4/php-linux-x86_64
+    curl -fsSL -o pcov.so https://github.com/publicala/php-ci-static/releases/download/latest-8.4/pcov-linux-x86_64.so
+    chmod +x php
+    sudo mv php /usr/local/bin/php
+
+- run: php -d zend_extension=$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
 ```
 
 ### Coverage with xdebug (or step-debugging)
-
-Download the shared module and load it via `zend_extension`:
 
 ```yaml
 - name: Install PHP + xdebug
@@ -70,23 +78,23 @@ Download the shared module and load it via `zend_extension`:
 
 ## Extensions
 
-### Baked in (39, all static)
+### Baked in (38, all static)
 
 ```
 apcu        bcmath      calendar    ctype       curl
 dom         exif        fileinfo    filter      gd
 gmp         iconv       intl        mbstring    mysqli
-opcache     openssl     pcntl       pcov        pdo
-pdo_mysql   pdo_pgsql   pdo_sqlite  pgsql       phar
-posix       redis       session     simplexml   soap
-sockets     sodium      sqlite3     tokenizer   xml
-xmlreader   xmlwriter   zip         zlib
+opcache     openssl     pcntl       pdo         pdo_mysql
+pdo_pgsql   pdo_sqlite  pgsql       phar        posix
+redis       session     simplexml   soap        sockets
+sodium      sqlite3     tokenizer   xml         xmlreader
+xmlwriter   zip         zlib
 ```
 
 ### Shared (downloaded separately)
 
 ```
-xdebug
+pcov, xdebug
 ```
 
 ### What's intentionally not in here

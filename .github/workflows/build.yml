@@ -27,18 +27,18 @@ jobs:
       # CI workload (lint, phpstan, pint, tests against MySQL /
       # Postgres / SQLite / Redis) without falling back to a
       # container.
-      #
-      # pcov is included as the default fast coverage driver
-      # (10-100x quicker than xdebug). xdebug is built separately
-      # as a shared .so further down the workflow because SPC only
-      # supports xdebug as a shared module.
-      SPC_STATIC_EXTENSIONS: apcu,bcmath,calendar,ctype,curl,dom,exif,fileinfo,filter,gd,gmp,iconv,intl,mbstring,mysqli,opcache,openssl,pcntl,pcov,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,redis,session,simplexml,soap,sockets,sodium,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
+      SPC_STATIC_EXTENSIONS: apcu,bcmath,calendar,ctype,curl,dom,exif,fileinfo,filter,gd,gmp,iconv,intl,mbstring,mysqli,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,redis,session,simplexml,soap,sockets,sodium,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
+      # Shared extensions built as separate .so files. SPC only
+      # supports xdebug and pcov as shared modules, never static.
+      # Both are zero-cost when not loaded, opt-in when needed.
+      SPC_SHARED_EXTENSIONS: xdebug,pcov
     steps:
       - uses: actions/checkout@v6
 
       - name: Install static-php-cli
         run: |
-          curl -fsSL -o spc https://dl.static-php.dev/static-php-cli/spc-bin/nightly/spc-linux-x86_64
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+            -o spc https://dl.static-php.dev/static-php-cli/spc-bin/nightly/spc-linux-x86_64
           chmod +x spc
           ./spc --version
 
@@ -57,14 +57,14 @@ jobs:
         run: |
           ./spc download \
             --with-php=${{ matrix.php_version }} \
-            --for-extensions="$SPC_STATIC_EXTENSIONS,xdebug" \
+            --for-extensions="$SPC_STATIC_EXTENSIONS,$SPC_SHARED_EXTENSIONS" \
             --prefer-pre-built
 
-      - name: Build CLI + xdebug shared
+      - name: Build CLI + shared extensions
         run: |
           ./spc build "$SPC_STATIC_EXTENSIONS" \
             --build-cli \
-            --build-shared=xdebug
+            --build-shared="$SPC_SHARED_EXTENSIONS"
 
       - name: Verify static binary
         run: |
@@ -73,11 +73,13 @@ jobs:
           ./buildroot/bin/php -m
           ./buildroot/bin/php -r 'echo "json: ", json_encode(["ok" => true]), PHP_EOL;'
           ./buildroot/bin/php --ri opcache | head -5
-          ./buildroot/bin/php --ri pcov | head -5
 
-      - name: Verify xdebug shared loads
+      - name: Verify shared extensions load
         run: |
-          ./buildroot/bin/php -d "zend_extension=$PWD/buildroot/modules/xdebug.so" --ri xdebug | head -10
+          for ext in xdebug pcov; do
+            echo "--- $ext ---"
+            ./buildroot/bin/php -d "zend_extension=$PWD/buildroot/modules/$ext.so" --ri "$ext" | head -10
+          done
 
       - name: Capture exact PHP version
         id: ver
@@ -91,7 +93,8 @@ jobs:
           mkdir -p dist
           cp buildroot/bin/php dist/php-linux-x86_64
           cp buildroot/modules/xdebug.so dist/xdebug-linux-x86_64.so
-          (cd dist && sha256sum php-linux-x86_64 xdebug-linux-x86_64.so > SHA256SUMS)
+          cp buildroot/modules/pcov.so dist/pcov-linux-x86_64.so
+          (cd dist && sha256sum php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so > SHA256SUMS)
           ls -la dist/
 
       - uses: actions/upload-artifact@v7
@@ -113,19 +116,20 @@ jobs:
           gh release create "$TAG" \
             dist/php-linux-x86_64 \
             dist/xdebug-linux-x86_64.so \
+            dist/pcov-linux-x86_64.so \
             dist/SHA256SUMS \
             --title "PHP $EXACT (static, linux x86_64)" \
             --notes "Built by static-php-cli on $(date -u +%FT%TZ)
 
           PHP: \`$EXACT\` (series \`$SERIES\`)
           Static extensions: \`$EXTENSIONS_LIST\`
-          Shared extensions: \`xdebug\`
+          Shared extensions: \`xdebug\`, \`pcov\`
           Runner: \`depot-ubuntu-24.04-16\`
           Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           ## Usage
 
-          Default (no xdebug, fastest):
+          Default (no coverage, fastest):
 
           \`\`\`yaml
           - name: Install PHP
@@ -136,21 +140,18 @@ jobs:
               php -v
           \`\`\`
 
-          Coverage with pcov (10-100x faster than xdebug, baked in):
+          Coverage with pcov (recommended, 10-100x faster than xdebug):
 
           \`\`\`yaml
-          - run: php -d pcov.enabled=1 vendor/bin/pest --coverage
+          - run: |
+              curl -fsSL -o pcov.so https://github.com/${{ github.repository }}/releases/download/$TAG/pcov-linux-x86_64.so
+              php -d zend_extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
           \`\`\`
 
-          With xdebug (step-debugging or branch coverage):
+          Coverage with xdebug (or step-debugging):
 
           \`\`\`yaml
-          - name: Install PHP + xdebug
-            run: |
-              curl -fsSL -o php https://github.com/${{ github.repository }}/releases/download/$TAG/php-linux-x86_64
+          - run: |
               curl -fsSL -o xdebug.so https://github.com/${{ github.repository }}/releases/download/$TAG/xdebug-linux-x86_64.so
-              chmod +x php
-              sudo mv php /usr/local/bin/php
-
-          - run: php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
+              php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
           \`\`\`"
