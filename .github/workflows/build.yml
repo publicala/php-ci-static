@@ -1,7 +1,18 @@
 name: Build static PHP
 
 on:
+  # Manual trigger for one-off rebuilds.
   workflow_dispatch:
+  # Auto-rebuild whenever the workflow itself changes on main.
+  # Keeps the published binaries in sync with the build config.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build.yml'
+  # Weekly catch-up to pick up new PHP patches (8.3.x, 8.4.x, 8.5.x)
+  # and SPC nightly updates without anyone touching the repo.
+  schedule:
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: write
