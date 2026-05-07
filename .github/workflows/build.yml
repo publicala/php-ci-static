@@ -22,6 +22,12 @@ jobs:
       matrix:
         php_version: ['8.3', '8.4', '8.5']
     env:
+      # Link against glibc instead of musl. musl static binaries
+      # cannot dlopen shared extensions (it has no dlopen impl);
+      # glibc-linked binaries can. Every Ubuntu / Debian / Depot
+      # runner ships glibc, so the binary stays portable across
+      # any standard CI runner.
+      SPC_LIBC: glibc
       # Static extensions baked into the binary. Tuned to match what
       # Laravel apps actually need so the binary covers the common
       # CI workload (lint, phpstan, pint, tests against MySQL /

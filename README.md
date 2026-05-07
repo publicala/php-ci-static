@@ -112,3 +112,5 @@ Manual trigger (`workflow_dispatch`). Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu
 ## Scope
 
 Linux x86_64 only. PHP 8.3, 8.4, 8.5. NTS (single-threaded). JIT enabled. Stripped binary.
+
+All extensions are linked statically into the binary; only libc is dynamic (glibc). Every Ubuntu / Debian / Depot CI runner ships glibc, so the binary works out of the box. The dynamic libc is what allows `xdebug.so` and `pcov.so` to load via `zend_extension` — musl-static binaries cannot dlopen shared modules.
