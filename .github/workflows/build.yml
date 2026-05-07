@@ -124,47 +124,70 @@ jobs:
           EXACT: ${{ steps.ver.outputs.exact }}
           SERIES: ${{ matrix.php_version }}
           EXTENSIONS_LIST: ${{ env.SPC_STATIC_EXTENSIONS }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Release pattern is "create-or-edit + upload --clobber" so the
+        # sliding tag is never deleted between runs. Avoids the 404 window
+        # consumers would otherwise see while assets are being staged.
         run: |
-          gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" \
-            dist/php-linux-x86_64 \
-            dist/xdebug-linux-x86_64.so \
-            dist/pcov-linux-x86_64.so \
-            dist/SHA256SUMS \
-            --title "PHP $EXACT (static, linux x86_64)" \
-            --notes "Built by static-php-cli on $(date -u +%FT%TZ)
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Built by static-php-cli on $(date -u +%FT%TZ)
 
           PHP: \`$EXACT\` (series \`$SERIES\`)
           Static extensions: \`$EXTENSIONS_LIST\`
           Shared extensions: \`xdebug\`, \`pcov\`
           Runner: \`depot-ubuntu-24.04-16\`
-          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          Workflow run: $RUN_URL
 
           ## Usage
 
-          Default (no coverage, fastest):
+          Default (no coverage, fastest). Verifies the binary against \`SHA256SUMS\`:
 
-          \`\`\`yaml
+          ~~~yaml
           - name: Install PHP
             run: |
-              curl -fsSL -o php https://github.com/${{ github.repository }}/releases/download/$TAG/php-linux-x86_64
-              chmod +x php
-              sudo mv php /usr/local/bin/php
+              BASE=https://github.com/$REPO/releases/download/$TAG
+              curl -fsSL -O "\$BASE/php-linux-x86_64"
+              curl -fsSL -O "\$BASE/SHA256SUMS"
+              sha256sum -c SHA256SUMS --ignore-missing
+              chmod +x php-linux-x86_64
+              sudo mv php-linux-x86_64 /usr/local/bin/php
               php -v
-          \`\`\`
+          ~~~
 
           Coverage with pcov (recommended, 10-100x faster than xdebug):
 
-          \`\`\`yaml
+          ~~~yaml
           - run: |
-              curl -fsSL -o pcov.so https://github.com/${{ github.repository }}/releases/download/$TAG/pcov-linux-x86_64.so
+              curl -fsSL -o pcov.so https://github.com/$REPO/releases/download/$TAG/pcov-linux-x86_64.so
               php -d extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
-          \`\`\`
+          ~~~
 
           Coverage with xdebug (or step-debugging):
 
-          \`\`\`yaml
+          ~~~yaml
           - run: |
-              curl -fsSL -o xdebug.so https://github.com/${{ github.repository }}/releases/download/$TAG/xdebug-linux-x86_64.so
+              curl -fsSL -o xdebug.so https://github.com/$REPO/releases/download/$TAG/xdebug-linux-x86_64.so
               php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
-          \`\`\`"
+          ~~~
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "PHP $EXACT (static, linux x86_64)" \
+              --notes-file release-notes.md
+          else
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "PHP $EXACT (static, linux x86_64)" \
+              --notes-file release-notes.md
+          fi
+
+          gh release upload "$TAG" \
+            dist/php-linux-x86_64 \
+            dist/xdebug-linux-x86_64.so \
+            dist/pcov-linux-x86_64.so \
+            dist/SHA256SUMS \
+            --clobber

@@ -34,11 +34,16 @@ The static binary covers the common Laravel CI workload — lint, phpstan, pint,
 ```yaml
 - name: Install PHP
   run: |
-    curl -fsSL -o php https://github.com/publicala/php-ci-static/releases/download/latest-8.4/php-linux-x86_64
-    chmod +x php
-    sudo mv php /usr/local/bin/php
+    BASE=https://github.com/publicala/php-ci-static/releases/download/latest-8.4
+    curl -fsSL -O "$BASE/php-linux-x86_64"
+    curl -fsSL -O "$BASE/SHA256SUMS"
+    sha256sum -c SHA256SUMS --ignore-missing
+    chmod +x php-linux-x86_64
+    sudo mv php-linux-x86_64 /usr/local/bin/php
     php -v
 ```
+
+`sha256sum -c --ignore-missing` skips lines for files you didn't download (e.g., the `.so` modules below) but still verifies the binary you did. If the binary's hash doesn't match, the step fails.
 
 ### Coverage with pcov (recommended)
 
@@ -66,14 +71,6 @@ The static binary covers the common Laravel CI workload — lint, phpstan, pint,
     sudo mv php /usr/local/bin/php
 
 - run: php -d zend_extension=$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
-```
-
-### Verify checksums (optional)
-
-```yaml
-- run: |
-    curl -fsSL -O https://github.com/publicala/php-ci-static/releases/download/latest-8.4/SHA256SUMS
-    sha256sum -c SHA256SUMS --ignore-missing
 ```
 
 ## Extensions
