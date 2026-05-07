@@ -79,7 +79,9 @@ jobs:
           ./buildroot/bin/php -v
           ./buildroot/bin/php -m
           ./buildroot/bin/php -r 'echo "json: ", json_encode(["ok" => true]), PHP_EOL;'
-          ./buildroot/bin/php --ri opcache > /dev/null
+          # opcache registers under "Zend OPcache" (with a space) in [Zend Modules],
+          # so --ri opcache is unreliable. extension_loaded normalises the name.
+          ./buildroot/bin/php -r 'exit(extension_loaded("Zend OPcache") ? 0 : 1);'
 
       - name: Verify shared extensions load
         # xdebug is a Zend extension; pcov is a regular PHP extension.
