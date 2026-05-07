@@ -88,6 +88,10 @@ sodium      sqlite3     tokenizer   xml         xmlreader
 xmlwriter   zip         zlib
 ```
 
+`mbstring` ships with oniguruma support enabled, so `mb_split`,
+`mb_ereg`, `mb_ereg_match`, and friends all work — Laravel's
+`Illuminate\Support\Str` depends on this.
+
 ### Shared (downloaded separately)
 
 ```
