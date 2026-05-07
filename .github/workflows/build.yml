@@ -185,8 +185,14 @@ jobs:
           EOF
 
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # Move the underlying git tag to the current commit.
+            # gh release edit --target is "unused if the Git tag already
+            # exists" per GitHub's API docs, so the tag has to be moved
+            # explicitly via the git refs API. Without this the Releases
+            # UI shows a stale commit hash next to the sliding tag.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
             gh release edit "$TAG" \
-              --target "$GITHUB_SHA" \
               --title "PHP $EXACT (static, linux x86_64)" \
               --notes-file release-notes.md
           else
