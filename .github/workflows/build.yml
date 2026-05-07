@@ -12,6 +12,9 @@ concurrency:
 
 jobs:
   build:
+    name: PHP ${{ matrix.php_version }}
+    # PHP compilation is CPU-bound; -16 keeps each matrix arm under ~10 min
+    # versus ~30 on base. Per pla-stack sizing policy.
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 60
     strategy:
@@ -19,7 +22,17 @@ jobs:
       matrix:
         php_version: ['8.3', '8.4', '8.5']
     env:
-      SPC_EXTENSIONS: bcmath,ctype,curl,dom,fileinfo,filter,gd,iconv,intl,mbstring,opcache,openssl,pcntl,pdo,pdo_sqlite,phar,posix,session,simplexml,sockets,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
+      # Static extensions baked into the binary. Tuned to match what
+      # Laravel apps actually need so the binary covers the common
+      # CI workload (lint, phpstan, pint, tests against MySQL /
+      # Postgres / SQLite / Redis) without falling back to a
+      # container.
+      #
+      # pcov is included as the default fast coverage driver
+      # (10-100x quicker than xdebug). xdebug is built separately
+      # as a shared .so further down the workflow because SPC only
+      # supports xdebug as a shared module.
+      SPC_STATIC_EXTENSIONS: apcu,bcmath,calendar,ctype,curl,dom,exif,fileinfo,filter,gd,gmp,iconv,intl,mbstring,mysqli,opcache,openssl,pcntl,pcov,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,redis,session,simplexml,soap,sockets,sodium,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
     steps:
       - uses: actions/checkout@v6
 
@@ -41,16 +54,30 @@ jobs:
           key: spc-${{ matrix.php_version }}-${{ hashFiles('.github/workflows/build.yml') }}
 
       - name: Download sources
-        run: ./spc download --with-php=${{ matrix.php_version }} --for-extensions="$SPC_EXTENSIONS"
-
-      - name: Build CLI
-        run: ./spc build "$SPC_EXTENSIONS" --build-cli
-
-      - name: Verify binary
         run: |
-          ls -la buildroot/bin/
+          ./spc download \
+            --with-php=${{ matrix.php_version }} \
+            --for-extensions="$SPC_STATIC_EXTENSIONS,xdebug" \
+            --prefer-pre-built
+
+      - name: Build CLI + xdebug shared
+        run: |
+          ./spc build "$SPC_STATIC_EXTENSIONS" \
+            --build-cli \
+            --build-shared=xdebug
+
+      - name: Verify static binary
+        run: |
+          ls -la buildroot/bin/ buildroot/modules/
           ./buildroot/bin/php -v
           ./buildroot/bin/php -m
+          ./buildroot/bin/php -r 'echo "json: ", json_encode(["ok" => true]), PHP_EOL;'
+          ./buildroot/bin/php --ri opcache | head -5
+          ./buildroot/bin/php --ri pcov | head -5
+
+      - name: Verify xdebug shared loads
+        run: |
+          ./buildroot/bin/php -d "zend_extension=$PWD/buildroot/modules/xdebug.so" --ri xdebug | head -10
 
       - name: Capture exact PHP version
         id: ver
@@ -63,34 +90,42 @@ jobs:
         run: |
           mkdir -p dist
           cp buildroot/bin/php dist/php-linux-x86_64
-          (cd dist && sha256sum php-linux-x86_64 > SHA256SUMS)
+          cp buildroot/modules/xdebug.so dist/xdebug-linux-x86_64.so
+          (cd dist && sha256sum php-linux-x86_64 xdebug-linux-x86_64.so > SHA256SUMS)
           ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: php-${{ matrix.php_version }}-linux-x86_64-${{ steps.ver.outputs.exact }}
           path: dist/
           if-no-files-found: error
 
       - name: Publish sliding release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: latest-${{ matrix.php_version }}
           EXACT: ${{ steps.ver.outputs.exact }}
           SERIES: ${{ matrix.php_version }}
+          EXTENSIONS_LIST: ${{ env.SPC_STATIC_EXTENSIONS }}
         run: |
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" \
-            dist/php-linux-x86_64 dist/SHA256SUMS \
+            dist/php-linux-x86_64 \
+            dist/xdebug-linux-x86_64.so \
+            dist/SHA256SUMS \
             --title "PHP $EXACT (static, linux x86_64)" \
             --notes "Built by static-php-cli on $(date -u +%FT%TZ)
 
           PHP: \`$EXACT\` (series \`$SERIES\`)
-          Extensions: \`$SPC_EXTENSIONS\`
+          Static extensions: \`$EXTENSIONS_LIST\`
+          Shared extensions: \`xdebug\`
           Runner: \`depot-ubuntu-24.04-16\`
           Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           ## Usage
+
+          Default (no xdebug, fastest):
 
           \`\`\`yaml
           - name: Install PHP
@@ -99,4 +134,23 @@ jobs:
               chmod +x php
               sudo mv php /usr/local/bin/php
               php -v
+          \`\`\`
+
+          Coverage with pcov (10-100x faster than xdebug, baked in):
+
+          \`\`\`yaml
+          - run: php -d pcov.enabled=1 vendor/bin/pest --coverage
+          \`\`\`
+
+          With xdebug (step-debugging or branch coverage):
+
+          \`\`\`yaml
+          - name: Install PHP + xdebug
+            run: |
+              curl -fsSL -o php https://github.com/${{ github.repository }}/releases/download/$TAG/php-linux-x86_64
+              curl -fsSL -o xdebug.so https://github.com/${{ github.repository }}/releases/download/$TAG/xdebug-linux-x86_64.so
+              chmod +x php
+              sudo mv php /usr/local/bin/php
+
+          - run: php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
           \`\`\`"

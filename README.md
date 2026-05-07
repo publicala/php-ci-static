@@ -1,6 +1,6 @@
 # php-ci-static
 
-Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/crazywhalecc/static-php-cli), scoped to what publicanow needs.
+Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/crazywhalecc/static-php-cli), tuned to cover what Laravel apps actually need.
 
 ## Why
 
@@ -10,15 +10,23 @@ Context and benchmarks: [publicala/publicanow#7](https://github.com/publicala/pu
 
 ## Available releases
 
-Sliding tags, updated on every successful build:
+Sliding tags, refreshed on every successful build:
 
 - `latest-8.3` → PHP 8.3 series
 - `latest-8.4` → PHP 8.4 series
 - `latest-8.5` → PHP 8.5 series
 
+Each release publishes two assets plus a checksum file:
+
+- `php-linux-x86_64` — static PHP CLI binary, all extensions baked in (no xdebug)
+- `xdebug-linux-x86_64.so` — xdebug Zend extension as a shared module, opt-in
+- `SHA256SUMS` — checksums for both
+
 ## Usage
 
-From any GH Actions job (swap `8.4` for your series):
+### Default (no xdebug, fastest)
+
+The static binary covers the common Laravel CI workload — lint, phpstan, pint, tests against MySQL / Postgres / SQLite / Redis. JIT is on. pcov is baked in (disabled by default, zero overhead).
 
 ```yaml
 - name: Install PHP
@@ -29,25 +37,70 @@ From any GH Actions job (swap `8.4` for your series):
     php -v
 ```
 
-Checksum (optional):
+### Coverage with pcov (recommended)
+
+10–100× faster than xdebug. Enable inline:
 
 ```yaml
+- run: php -d pcov.enabled=1 vendor/bin/pest --coverage
+```
+
+### Coverage with xdebug (or step-debugging)
+
+Download the shared module and load it via `zend_extension`:
+
+```yaml
+- name: Install PHP + xdebug
+  run: |
+    curl -fsSL -o php https://github.com/publicala/php-ci-static/releases/download/latest-8.4/php-linux-x86_64
+    curl -fsSL -o xdebug.so https://github.com/publicala/php-ci-static/releases/download/latest-8.4/xdebug-linux-x86_64.so
+    chmod +x php
+    sudo mv php /usr/local/bin/php
+
+- run: php -d zend_extension=$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
+```
+
+### Verify checksums (optional)
+
+```yaml
+- run: |
     curl -fsSL -O https://github.com/publicala/php-ci-static/releases/download/latest-8.4/SHA256SUMS
     sha256sum -c SHA256SUMS --ignore-missing
 ```
 
+## Extensions
+
+### Baked in (39, all static)
+
+```
+apcu        bcmath      calendar    ctype       curl
+dom         exif        fileinfo    filter      gd
+gmp         iconv       intl        mbstring    mysqli
+opcache     openssl     pcntl       pcov        pdo
+pdo_mysql   pdo_pgsql   pdo_sqlite  pgsql       phar
+posix       redis       session     simplexml   soap
+sockets     sodium      sqlite3     tokenizer   xml
+xmlreader   xmlwriter   zip         zlib
+```
+
+### Shared (downloaded separately)
+
+```
+xdebug
+```
+
+### What's intentionally not in here
+
+- **node / npm / yarn** — use [`lorisleiva/laravel-docker`](https://github.com/lorisleiva/laravel-docker) when you need them in the same job.
+- **mysql / postgres / redis client binaries** — same, use a container.
+- **imagick, ghostscript, chromium** — system tools; out of scope for a static binary.
+
+The pla-stack [runners reference](https://github.com/publicala/pla-stack/blob/main/references/github-actions-runners.md) documents the full three-tier strategy (static PHP → community container → custom container).
+
 ## Build
 
-Manual trigger (`workflow_dispatch`). Runs a matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16` and publishes sliding tags `latest-<major>.<minor>`. Each run overwrites previous release assets.
+Manual trigger (`workflow_dispatch`). Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`. Each successful run overwrites the matching `latest-X.Y` release. Builds on non-`main` branches still produce workflow artifacts but skip the release publish step, so feature branches can verify the pipeline without touching production tags.
 
-## Scope (POC)
+## Scope
 
-Linux x86_64, PHP 8.3 + 8.4 + 8.5. Extensions tuned for publicanow (Laravel 12, Pest 4, SQLite, Horizon, DomPDF) and shared across all versions:
-
-```
-bcmath, ctype, curl, dom, fileinfo, filter, gd, iconv, intl, mbstring, opcache, openssl,
-pcntl, pdo, pdo_sqlite, phar, posix, session, simplexml, sockets, sqlite3, tokenizer,
-xml, xmlreader, xmlwriter, zip, zlib
-```
-
-No pcov (unused). No xdebug. No MySQL driver yet (tests run on SQLite).
+Linux x86_64 only. PHP 8.3, 8.4, 8.5. NTS (single-threaded). JIT enabled. Stripped binary.
