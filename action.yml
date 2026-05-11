@@ -15,10 +15,6 @@ inputs:
     description: 'Coverage driver: none, pcov, or xdebug'
     required: false
     default: 'none'
-  composer:
-    description: 'Install Composer (stable) alongside PHP'
-    required: false
-    default: 'false'
 
 runs:
   using: 'composite'
@@ -28,7 +24,6 @@ runs:
       env:
         PHP_VERSION: ${{ inputs.php-version }}
         COVERAGE: ${{ inputs.coverage }}
-        COMPOSER: ${{ inputs.composer }}
       run: |
         set -euo pipefail
         case "$PHP_VERSION" in
@@ -45,13 +40,6 @@ runs:
             exit 1
             ;;
         esac
-        case "$COMPOSER" in
-          true|false) ;;
-          *)
-            echo "::error::composer must be true or false (got '$COMPOSER')"
-            exit 1
-            ;;
-        esac
         if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
           echo "::error::publicala/php-ci-static only ships Linux x86_64 binaries (got $(uname -s)/$(uname -m))"
           exit 1
@@ -62,7 +50,6 @@ runs:
       env:
         PHP_VERSION: ${{ inputs.php-version }}
         COVERAGE: ${{ inputs.coverage }}
-        COMPOSER: ${{ inputs.composer }}
       run: |
         set -euo pipefail
 
@@ -96,15 +83,12 @@ runs:
         mv php-linux-x86_64 "$BIN/php"
         echo "$BIN" >> "$GITHUB_PATH"
 
-        if [[ "$COMPOSER" == "true" ]]; then
-          # composer-stable.phar is a rolling release (no fixed hash to pin
-          # against), so we lean on HTTPS to getcomposer.org plus curl's
-          # retry policy. Mirrors what most CI recipes do, including the
-          # one publicala/coniglio#30 shipped.
-          curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
-            -o "$BIN/composer" https://getcomposer.org/composer-stable.phar
-          chmod +x "$BIN/composer"
-        fi
+        # composer-stable.phar is a rolling release (no fixed hash to pin
+        # against), so we lean on HTTPS to getcomposer.org plus curl's
+        # retry policy.
+        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
+          -o "$BIN/composer" https://getcomposer.org/composer-stable.phar
+        chmod +x "$BIN/composer"
 
         if [[ "$COVERAGE" != "none" ]]; then
           asset="${COVERAGE}-linux-x86_64.so"
@@ -143,8 +127,6 @@ runs:
         echo "::group::php --ini"
         php --ini
         echo "::endgroup::"
-        if [[ "$COMPOSER" == "true" ]]; then
-          echo "::group::composer --version"
-          composer --version
-          echo "::endgroup::"
-        fi
+        echo "::group::composer --version"
+        composer --version
+        echo "::endgroup::"

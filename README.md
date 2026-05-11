@@ -11,7 +11,7 @@ Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/c
     coverage: pcov           # optional, default: none
 ```
 
-That's it. The action downloads the static PHP binary for the matching `latest-8.4` release, verifies the checksum, puts `php` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls just work.
+That's it. The action downloads the static PHP binary for the matching `latest-8.4` release, verifies the checksum, puts both `php` and `composer` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls just work.
 
 ## Inputs
 
@@ -19,11 +19,10 @@ That's it. The action downloads the static PHP binary for the matching `latest-8
 |-------|----------|---------|-----------------|
 | `php-version` | yes | — | `8.3`, `8.4`, `8.5` |
 | `coverage` | no | `none` | `none`, `pcov`, `xdebug` |
-| `composer` | no | `false` | `true`, `false` |
 
 When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
 
-When `composer: true`, the action downloads `composer-stable.phar` and puts `composer` on `PATH` alongside `php`.
+Composer (stable) is always installed alongside `php`. It's a ~2-3s download and every realistic CI job needs it, so there's no opt-out.
 
 ## Examples
 
@@ -35,13 +34,10 @@ The static binary covers the common Laravel CI workload — lint, phpstan, pint,
 - uses: publicala/php-ci-static@v1
   with:
     php-version: '8.4'
-    composer: true
 
 - run: composer install --no-progress
 - run: vendor/bin/pest
 ```
-
-If your job only runs `vendor/bin/*` (lint, phpstan, test runners) against a cached `vendor/`, drop `composer: true` — composer is only needed where you actually invoke it.
 
 ### Coverage with pcov (recommended)
 
