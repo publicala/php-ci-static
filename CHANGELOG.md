@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.0
+
+- Composer is now always installed; the `composer` input from
+  v1.1.0 has been removed. Every realistic CI job needs composer
+  (composer install, vendor/bin/*, ad-hoc `composer show`), and
+  the download is ~2-3s — gating it behind a knob was extra
+  surface area for no benefit. Existing callers that still pass
+  `composer: true` will see a one-time "Unexpected input"
+  warning from GH Actions but otherwise keep working unchanged.
+
 ## v1.1.0
 
 - Add `composer` input (default `false`). When `true`, the action
