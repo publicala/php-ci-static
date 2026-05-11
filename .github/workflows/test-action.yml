@@ -25,6 +25,14 @@ jobs:
       matrix:
         php: ['8.3', '8.4', '8.5']
         cov: [none, pcov, xdebug]
+        composer: ['false']
+        # Add 3 composer:true cells (one per PHP version) at
+        # coverage: none. Composer install is PHP-version-agnostic
+        # so a single per-version probe is enough.
+        include:
+          - { php: '8.3', cov: none, composer: 'true' }
+          - { php: '8.4', cov: none, composer: 'true' }
+          - { php: '8.5', cov: none, composer: 'true' }
     steps:
       - uses: actions/checkout@v6
 
@@ -32,6 +40,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           coverage: ${{ matrix.cov }}
+          composer: ${{ matrix.composer }}
 
       # Separate step on purpose: exercises $GITHUB_PATH / $GITHUB_ENV
       # actually applying across the step boundary, which is the load-bearing
@@ -40,6 +49,7 @@ jobs:
         env:
           MATRIX_PHP: ${{ matrix.php }}
           MATRIX_COV: ${{ matrix.cov }}
+          MATRIX_COMPOSER: ${{ matrix.composer }}
         run: |
           set -euo pipefail
 
@@ -64,3 +74,14 @@ jobs:
               php -r 'exit(extension_loaded("xdebug") ? 1 : 0);'
               ;;
           esac
+
+          if [[ "$MATRIX_COMPOSER" == "true" ]]; then
+            command -v composer
+            composer --version | grep -F "Composer version"
+          else
+            # Negative assertion: composer must not be on PATH.
+            if command -v composer >/dev/null 2>&1; then
+              echo "::error::composer found on PATH but composer input was false"
+              exit 1
+            fi
+          fi

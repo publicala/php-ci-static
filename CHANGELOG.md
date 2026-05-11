@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.0
+
+- Add `composer` input (default `false`). When `true`, the action
+  downloads `composer-stable.phar` and puts `composer` on
+  `PATH` alongside `php`. Replaces the 4-line inline curl recipe
+  consumers (and the pla-stack audit) used to inject after the
+  PHP install. Non-breaking.
+
 ## v1.0.0
 
 First release of the composite action.
