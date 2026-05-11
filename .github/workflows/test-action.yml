@@ -75,13 +75,20 @@ jobs:
               ;;
           esac
 
+          ACTION_COMPOSER="$RUNNER_TEMP/php-ci-static/bin/composer"
           if [[ "$MATRIX_COMPOSER" == "true" ]]; then
-            command -v composer
+            # Positive: the action installed composer into its own bin
+            # dir, and $GITHUB_PATH prepends that dir so `composer`
+            # resolves to ours (not anything pre-installed on the runner
+            # image).
+            [[ -x "$ACTION_COMPOSER" ]] \
+              || { echo "::error::composer missing from $ACTION_COMPOSER"; exit 1; }
+            [[ "$(command -v composer)" == "$ACTION_COMPOSER" ]] \
+              || { echo "::error::PATH resolves to $(command -v composer), expected $ACTION_COMPOSER"; exit 1; }
             composer --version | grep -F "Composer version"
           else
-            # Negative assertion: composer must not be on PATH.
-            if command -v composer >/dev/null 2>&1; then
-              echo "::error::composer found on PATH but composer input was false"
-              exit 1
-            fi
+            # Negative: the action's bin must not contain composer.
+            # PATH-level composer is fine (Depot images ship one).
+            [[ ! -e "$ACTION_COMPOSER" ]] \
+              || { echo "::error::$ACTION_COMPOSER exists but composer input was false"; exit 1; }
           fi
