@@ -1,10 +1,75 @@
 # php-ci-static
 
-Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/crazywhalecc/static-php-cli), tuned to cover what Laravel apps actually need.
+Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/crazywhalecc/static-php-cli), tuned to cover what Laravel apps actually need, and shipped behind a composite GitHub Action so consumers install PHP with one `uses:` step.
+
+## Quick start
+
+```yaml
+- uses: publicala/php-ci-static@v1
+  with:
+    php-version: '8.4'
+    coverage: pcov           # optional, default: none
+```
+
+That's it. The action downloads the static PHP binary for the matching `latest-8.4` release, verifies the checksum, puts `php` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls just work.
+
+## Inputs
+
+| Input | Required | Default | Accepted values |
+|-------|----------|---------|-----------------|
+| `php-version` | yes | — | `8.3`, `8.4`, `8.5` |
+| `coverage` | no | `none` | `none`, `pcov`, `xdebug` |
+
+When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
+
+## Examples
+
+### Default (no coverage, fastest)
+
+The static binary covers the common Laravel CI workload — lint, phpstan, pint, tests against MySQL / Postgres / SQLite / Redis. JIT is on.
+
+```yaml
+- uses: publicala/php-ci-static@v1
+  with:
+    php-version: '8.4'
+
+- run: composer install --no-progress
+- run: vendor/bin/pest
+```
+
+### Coverage with pcov (recommended)
+
+10–100× faster than xdebug.
+
+```yaml
+- uses: publicala/php-ci-static@v1
+  with:
+    php-version: '8.4'
+    coverage: pcov
+
+- run: vendor/bin/pest --coverage
+```
+
+### Coverage with xdebug
+
+```yaml
+- uses: publicala/php-ci-static@v1
+  with:
+    php-version: '8.4'
+    coverage: xdebug
+
+- run: vendor/bin/pest --coverage
+```
+
+For step-debugging, override the mode inline:
+
+```yaml
+- run: php -d xdebug.mode=debug,coverage vendor/bin/pest --coverage
+```
 
 ## Why
 
-Third-party GH Actions runners (Depot, Blacksmith, Namespace, BuildJet) get flagged as self-hosted, so `shivammathur/setup-php` falls back to a PPA install (~85s on Depot vs ~6s on GH-hosted). A pre-built static binary skips that: one `curl`, one `chmod`, ready in a few seconds.
+Third-party GH Actions runners (Depot, Blacksmith, Namespace, BuildJet) get flagged as self-hosted, so `shivammathur/setup-php` falls back to a PPA install (~85s on Depot vs ~6s on GH-hosted). A pre-built static binary skips that.
 
 Context and benchmarks: [publicala/publicanow#7](https://github.com/publicala/publicanow/pull/7).
 
@@ -24,54 +89,6 @@ Each release publishes three assets plus a checksum file:
 - `SHA256SUMS` — checksums for all three
 
 pcov and xdebug are shared-only in static-php-cli, so they ship as separate `.so` files. Both are zero-cost when not loaded.
-
-## Usage
-
-### Default (no coverage, fastest)
-
-The static binary covers the common Laravel CI workload — lint, phpstan, pint, tests against MySQL / Postgres / SQLite / Redis. JIT is on. No coverage driver loaded.
-
-```yaml
-- name: Install PHP
-  run: |
-    BASE=https://github.com/publicala/php-ci-static/releases/download/latest-8.4
-    curl -fsSL -O "$BASE/php-linux-x86_64"
-    curl -fsSL -O "$BASE/SHA256SUMS"
-    sha256sum -c SHA256SUMS --ignore-missing
-    chmod +x php-linux-x86_64
-    sudo mv php-linux-x86_64 /usr/local/bin/php
-    php -v
-```
-
-`sha256sum -c --ignore-missing` skips lines for files you didn't download (e.g., the `.so` modules below) but still verifies the binary you did. If the binary's hash doesn't match, the step fails.
-
-### Coverage with pcov (recommended)
-
-10–100× faster than xdebug. Download the shared module and load it via `extension` (pcov is a regular PHP extension, not a Zend extension like xdebug):
-
-```yaml
-- name: Install PHP + pcov
-  run: |
-    curl -fsSL -o php https://github.com/publicala/php-ci-static/releases/download/latest-8.4/php-linux-x86_64
-    curl -fsSL -o pcov.so https://github.com/publicala/php-ci-static/releases/download/latest-8.4/pcov-linux-x86_64.so
-    chmod +x php
-    sudo mv php /usr/local/bin/php
-
-- run: php -d extension=$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
-```
-
-### Coverage with xdebug (or step-debugging)
-
-```yaml
-- name: Install PHP + xdebug
-  run: |
-    curl -fsSL -o php https://github.com/publicala/php-ci-static/releases/download/latest-8.4/php-linux-x86_64
-    curl -fsSL -o xdebug.so https://github.com/publicala/php-ci-static/releases/download/latest-8.4/xdebug-linux-x86_64.so
-    chmod +x php
-    sudo mv php /usr/local/bin/php
-
-- run: php -d zend_extension=$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
-```
 
 ## Extensions
 
@@ -106,9 +123,47 @@ pcov, xdebug
 
 The pla-stack [runners reference](https://github.com/publicala/pla-stack/blob/main/references/github-actions-runners.md) documents the full three-tier strategy (static PHP → community container → custom container).
 
+## Manual install (no GitHub Actions)
+
+For Forge, raw shell, or any non-Actions runner. Same recipe the action runs internally:
+
+```bash
+BASE=https://github.com/publicala/php-ci-static/releases/download/latest-8.4
+curl -fsSL -O "$BASE/php-linux-x86_64"
+curl -fsSL -O "$BASE/SHA256SUMS"
+grep ' php-linux-x86_64$' SHA256SUMS | sha256sum -c -
+chmod +x php-linux-x86_64
+sudo mv php-linux-x86_64 /usr/local/bin/php
+php -v
+```
+
+Piping the matching line into `sha256sum -c` (rather than `sha256sum -c SHA256SUMS --ignore-missing`) guarantees the check actually ran — `--ignore-missing` would exit 0 even if nothing matched.
+
+For coverage, download the `.so` and load it via `-d`:
+
+```bash
+curl -fsSL -o pcov.so "$BASE/pcov-linux-x86_64.so"
+php -d extension=$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
+```
+
+```bash
+curl -fsSL -o xdebug.so "$BASE/xdebug-linux-x86_64.so"
+php -d zend_extension=$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
+```
+
+## Versioning
+
+The composite action follows semver-style sliding tags:
+
+- `@v1` — sliding, moves forward with backward-compatible releases. Pin this for stability.
+- `@v1.0.0` — immutable; pin by exact tag if you want zero drift.
+- `@main` — dev branch; use only for testing in-flight changes.
+
+Breaking input changes will ship as `@v2`. See [CHANGELOG.md](CHANGELOG.md).
+
 ## Build
 
-Manual trigger (`workflow_dispatch`). Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`. Each successful run overwrites the matching `latest-X.Y` release. Builds on non-`main` branches still produce workflow artifacts but skip the release publish step, so feature branches can verify the pipeline without touching production tags.
+Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`, triggered by `workflow_dispatch`, a weekly cron, or any push to `main` that touches `.github/workflows/build.yml`. Each successful run overwrites the matching `latest-X.Y` release and moves the underlying git tag to the build commit.
 
 ## Scope
 

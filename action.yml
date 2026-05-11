@@ -1,0 +1,122 @@
+name: 'publicala/php-ci-static'
+description: >-
+  Install a pre-built static PHP CLI from publicala/php-ci-static,
+  with optional pcov or xdebug auto-loaded via PHP_INI_SCAN_DIR.
+author: 'publicala'
+branding:
+  icon: 'cpu'
+  color: 'blue'
+
+inputs:
+  php-version:
+    description: 'PHP series: 8.3, 8.4, or 8.5'
+    required: true
+  coverage:
+    description: 'Coverage driver: none, pcov, or xdebug'
+    required: false
+    default: 'none'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        PHP_VERSION: ${{ inputs.php-version }}
+        COVERAGE: ${{ inputs.coverage }}
+      run: |
+        set -euo pipefail
+        case "$PHP_VERSION" in
+          8.3|8.4|8.5) ;;
+          *)
+            echo "::error::php-version must be one of 8.3, 8.4, 8.5 (got '$PHP_VERSION')"
+            exit 1
+            ;;
+        esac
+        case "$COVERAGE" in
+          none|pcov|xdebug) ;;
+          *)
+            echo "::error::coverage must be one of none, pcov, xdebug (got '$COVERAGE')"
+            exit 1
+            ;;
+        esac
+        if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
+          echo "::error::publicala/php-ci-static only ships Linux x86_64 binaries (got $(uname -s)/$(uname -m))"
+          exit 1
+        fi
+
+    - name: Install static PHP
+      shell: bash
+      env:
+        PHP_VERSION: ${{ inputs.php-version }}
+        COVERAGE: ${{ inputs.coverage }}
+      run: |
+        set -euo pipefail
+
+        ROOT="$RUNNER_TEMP/php-ci-static"
+        BIN="$ROOT/bin"
+        CONFD="$ROOT/conf.d"
+        BASE="https://github.com/publicala/php-ci-static/releases/download/latest-${PHP_VERSION}"
+
+        # Idempotent: clean before staging in case the action runs twice in one job.
+        rm -rf "$ROOT"
+        mkdir -p "$BIN" "$CONFD"
+
+        cd "$(mktemp -d)"
+        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL -O "$BASE/php-linux-x86_64"
+        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL -O "$BASE/SHA256SUMS"
+
+        # `sha256sum -c --ignore-missing` exits 0 if the assets you downloaded
+        # don't appear in SHA256SUMS at all, so we assert the line exists first,
+        # then check exactly that line.
+        verify() {
+          local name="$1"
+          if ! grep -Eq "^[0-9a-f]{64}  ${name}$" SHA256SUMS; then
+            echo "::error::SHA256SUMS missing entry for ${name}"
+            exit 1
+          fi
+          grep " ${name}$" SHA256SUMS | sha256sum -c -
+        }
+        verify "php-linux-x86_64"
+
+        chmod +x php-linux-x86_64
+        mv php-linux-x86_64 "$BIN/php"
+        echo "$BIN" >> "$GITHUB_PATH"
+
+        if [[ "$COVERAGE" != "none" ]]; then
+          asset="${COVERAGE}-linux-x86_64.so"
+          curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL -O "$BASE/$asset"
+          verify "$asset"
+          mv "$asset" "$CONFD/${COVERAGE}.so"
+
+          case "$COVERAGE" in
+            pcov)
+              printf 'extension=%s/pcov.so\npcov.enabled=1\n' \
+                "$CONFD" > "$CONFD/coverage.ini"
+              ;;
+            xdebug)
+              # mode=coverage matches what setup-php does for `coverage: xdebug`.
+              # Override inline (-d xdebug.mode=...) for step-debug or other modes.
+              printf 'zend_extension=%s/xdebug.so\nxdebug.mode=coverage\n' \
+                "$CONFD" > "$CONFD/coverage.ini"
+              ;;
+          esac
+          echo "PHP_INI_SCAN_DIR=$CONFD" >> "$GITHUB_ENV"
+        fi
+
+        # $GITHUB_PATH and $GITHUB_ENV only apply to *subsequent* steps, so
+        # re-export locally to make these diagnostics meaningful.
+        export PATH="$BIN:$PATH"
+        if [[ "$COVERAGE" != "none" ]]; then
+          export PHP_INI_SCAN_DIR="$CONFD"
+        fi
+
+        echo "::group::php -v"
+        php -v
+        echo "::endgroup::"
+        echo "::group::php -m"
+        php -m
+        echo "::endgroup::"
+        echo "::group::php --ini"
+        php --ini
+        echo "::endgroup::"
