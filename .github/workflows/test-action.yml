@@ -1,0 +1,66 @@
+name: Test action
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'action.yml'
+      - '.github/workflows/test-action.yml'
+  pull_request:
+    paths:
+      - 'action.yml'
+      - '.github/workflows/test-action.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: test-action-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: PHP ${{ matrix.php }} / coverage=${{ matrix.cov }}
+    runs-on: depot-ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        cov: [none, pcov, xdebug]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: ${{ matrix.cov }}
+
+      # Separate step on purpose: exercises $GITHUB_PATH / $GITHUB_ENV
+      # actually applying across the step boundary, which is the load-bearing
+      # contract of the action.
+      - name: Probe
+        env:
+          MATRIX_PHP: ${{ matrix.php }}
+          MATRIX_COV: ${{ matrix.cov }}
+        run: |
+          set -euo pipefail
+
+          php -v | grep -F "PHP ${MATRIX_PHP}."
+          php -r 'exit(extension_loaded("Zend OPcache") ? 0 : 1);'
+          php -r 'exit(count(mb_split(",", "a,b,c")) === 3 ? 0 : 1);'
+
+          case "$MATRIX_COV" in
+            pcov)
+              php --ini | grep -F "$RUNNER_TEMP/php-ci-static/conf.d"
+              php -r 'exit(extension_loaded("pcov") ? 0 : 1);'
+              php -m | grep -F pcov
+              ;;
+            xdebug)
+              php --ini | grep -F "$RUNNER_TEMP/php-ci-static/conf.d"
+              php -r 'exit(extension_loaded("xdebug") ? 0 : 1);'
+              php --ri xdebug | grep -F "mode => coverage"
+              ;;
+            none)
+              # Negative assertions: nothing coverage-related leaks in.
+              php -r 'exit(extension_loaded("pcov") ? 1 : 0);'
+              php -r 'exit(extension_loaded("xdebug") ? 1 : 0);'
+              ;;
+          esac
