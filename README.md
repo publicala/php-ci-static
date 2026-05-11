@@ -19,8 +19,11 @@ That's it. The action downloads the static PHP binary for the matching `latest-8
 |-------|----------|---------|-----------------|
 | `php-version` | yes | — | `8.3`, `8.4`, `8.5` |
 | `coverage` | no | `none` | `none`, `pcov`, `xdebug` |
+| `composer` | no | `false` | `true`, `false` |
 
 When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
+
+When `composer: true`, the action downloads `composer-stable.phar` and puts `composer` on `PATH` alongside `php`.
 
 ## Examples
 
@@ -32,10 +35,13 @@ The static binary covers the common Laravel CI workload — lint, phpstan, pint,
 - uses: publicala/php-ci-static@v1
   with:
     php-version: '8.4'
+    composer: true
 
 - run: composer install --no-progress
 - run: vendor/bin/pest
 ```
+
+If your job only runs `vendor/bin/*` (lint, phpstan, test runners) against a cached `vendor/`, drop `composer: true` — composer is only needed where you actually invoke it.
 
 ### Coverage with pcov (recommended)
 
