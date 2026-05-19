@@ -49,7 +49,7 @@ jobs:
       # `--disable-mbregex`, which strips mb_split / mb_ereg / mb_ereg_match
       # etc. Laravel's Illuminate\Support\Str uses mb_split, so its absence
       # breaks any Laravel boot path.
-      SPC_STATIC_EXTENSIONS: apcu,bcmath,calendar,ctype,curl,dom,exif,fileinfo,filter,gd,gmp,iconv,intl,mbregex,mbstring,mysqli,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,redis,session,simplexml,soap,sockets,sodium,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
+      SPC_STATIC_EXTENSIONS: apcu,bcmath,calendar,ctype,curl,dom,exif,fileinfo,filter,gd,gmp,iconv,imagick,intl,mbregex,mbstring,mysqli,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,redis,session,simplexml,soap,sockets,sodium,sqlite3,tokenizer,xml,xmlreader,xmlwriter,zip,zlib
       # Shared extensions built as separate .so files. SPC only
       # supports xdebug and pcov as shared modules, never static.
       # Both are zero-cost when not loaded, opt-in when needed.
@@ -102,6 +102,7 @@ jobs:
           # mbstring. It does not register as its own module, so we probe it
           # by calling mb_split. Laravel's Str helpers depend on this.
           ./buildroot/bin/php -r 'exit(function_exists("mb_split") && count(mb_split(",", "a,b,c")) === 3 ? 0 : 1);'
+          ./buildroot/bin/php -r 'exit(extension_loaded("imagick") && class_exists("Imagick") ? 0 : 1);'
 
       - name: Verify shared extensions load
         # xdebug is a Zend extension; pcov is a regular PHP extension.
