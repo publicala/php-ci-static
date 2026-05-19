@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.0
+
+- Static PHP binaries now include `imagick`. This keeps Laravel CI jobs
+  that require `ext-imagick` on the static PHP path instead of falling
+  back to a container.
+
 ## v1.2.0
 
 - Composer is now always installed; the `composer` input from

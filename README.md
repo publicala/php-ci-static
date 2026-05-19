@@ -94,17 +94,17 @@ pcov and xdebug are shared-only in static-php-cli, so they ship as separate `.so
 
 ## Extensions
 
-### Baked in (38, all static)
+### Baked in (39, all static)
 
 ```
 apcu        bcmath      calendar    ctype       curl
 dom         exif        fileinfo    filter      gd
-gmp         iconv       intl        mbstring    mysqli
-opcache     openssl     pcntl       pdo         pdo_mysql
-pdo_pgsql   pdo_sqlite  pgsql       phar        posix
-redis       session     simplexml   soap        sockets
-sodium      sqlite3     tokenizer   xml         xmlreader
-xmlwriter   zip         zlib
+gmp         iconv       imagick     intl        mbstring
+mysqli      opcache     openssl     pcntl       pdo
+pdo_mysql   pdo_pgsql   pdo_sqlite  pgsql       phar
+posix       redis       session     simplexml   soap
+sockets     sodium      sqlite3     tokenizer   xml
+xmlreader   xmlwriter   zip         zlib
 ```
 
 `mbstring` ships with oniguruma support enabled, so `mb_split`,
@@ -121,7 +121,7 @@ pcov, xdebug
 
 - **node / npm / yarn** — use [`lorisleiva/laravel-docker`](https://github.com/lorisleiva/laravel-docker) when you need them in the same job.
 - **mysql / postgres / redis client binaries** — same, use a container.
-- **imagick, ghostscript, chromium** — system tools; out of scope for a static binary.
+- **ghostscript, chromium** — system tools; out of scope for a static binary.
 
 The pla-stack [runners reference](https://github.com/publicala/pla-stack/blob/main/references/github-actions-runners.md) documents the full three-tier strategy (static PHP → community container → custom container).
 
