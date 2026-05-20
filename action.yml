@@ -16,7 +16,7 @@ inputs:
     required: false
     default: 'none'
   ini-values:
-    description: 'PHP ini directives, comma- or newline-separated. e.g. `memory_limit=512M, opcache.enable_cli=1`. Commas inside values are preserved (e.g. `disable_functions=exec,passthru`); only commas that precede a `<directive>=` are treated as separators. Composes with `coverage:` — both load from the same scan dir.'
+    description: 'PHP ini directives, comma- or newline-separated. e.g. `memory_limit=512M, opcache.enable_cli=1`. Values may contain commas in two ways: wrap the value in single or double quotes (`disable_functions="exec,passthru"`) — matches `shivammathur/setup-php` — or rely on the smart-split fallback, which only treats commas that precede a `<directive>=` as separators (so unquoted `disable_functions=exec,passthru` also works). Composes with `coverage:` — both load from the same scan dir.'
     required: false
     default: ''
 
@@ -50,17 +50,41 @@ runs:
           exit 1
         fi
         if [[ -n "$INI_VALUES" ]]; then
-          # Split on commas only when they precede a `<directive>=`, so
-          # `disable_functions=exec,passthru` stays one entry. Newlines are
-          # also separators, so callers can use YAML multiline (`|`) for
-          # values with key=value-looking substrings.
+          # Two-pass parser:
+          #   1. awk replaces commas INSIDE matched quotes with \001 and strips
+          #      the quote chars (setup-php-style: `key="a,b"` -> `key=a\001b`).
+          #   2. sed then splits on commas that precede a `<directive>=`, so the
+          #      unquoted form (`disable_functions=exec,passthru`) also stays
+          #      one entry. Newlines are separators too (YAML multiline).
+          # The \001 sentinel is restored to a literal comma when writing the
+          # ini file in the install step; here we just check shape.
           printf '%s\n' "$INI_VALUES" \
+            | awk '
+              BEGIN { sq = sprintf("%c", 39); dq = sprintf("%c", 34); s = sprintf("%c", 1) }
+              {
+                out = ""; q = ""; n = length($0)
+                for (i = 1; i <= n; i++) {
+                  c = substr($0, i, 1)
+                  if (q != "") {
+                    if (c == q) { q = ""; continue }
+                    if (c == ",") c = s
+                    out = out c
+                  } else if (c == sq || c == dq) {
+                    q = c
+                  } else {
+                    out = out c
+                  }
+                }
+                print out
+              }' \
             | sed -E 's/,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*=)/\n\1/g' \
             | while IFS= read -r raw; do
               pair="$(echo "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
               [[ -z "$pair" ]] && continue
               if [[ ! "$pair" =~ ^[A-Za-z_][A-Za-z0-9_.]*= ]]; then
-                echo "::error::ini-values: expected '<directive>=<value>' but got '$pair'"
+                # Restore sentinel commas so the error message shows the input
+                # as the user wrote it (minus the stripped quote chars).
+                echo "::error::ini-values: expected '<directive>=<value>' but got '${pair//$'\001'/,}'"
                 exit 1
               fi
             done
@@ -134,11 +158,33 @@ runs:
 
         if [[ -n "$INI_VALUES" ]]; then
           : > "$CONFD/custom.ini"
+          # See the matching block in the Validate step for the parser shape.
+          # Here we additionally restore the \001 sentinel back to a literal
+          # comma in the value before writing the ini file.
           printf '%s\n' "$INI_VALUES" \
+            | awk '
+              BEGIN { sq = sprintf("%c", 39); dq = sprintf("%c", 34); s = sprintf("%c", 1) }
+              {
+                out = ""; q = ""; n = length($0)
+                for (i = 1; i <= n; i++) {
+                  c = substr($0, i, 1)
+                  if (q != "") {
+                    if (c == q) { q = ""; continue }
+                    if (c == ",") c = s
+                    out = out c
+                  } else if (c == sq || c == dq) {
+                    q = c
+                  } else {
+                    out = out c
+                  }
+                }
+                print out
+              }' \
             | sed -E 's/,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*=)/\n\1/g' \
             | while IFS='=' read -r key val; do
               key="$(echo "$key" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
               val="$(echo "$val" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+              val="${val//$'\001'/,}"
               [[ -z "$key" ]] && continue
               echo "${key}=${val}" >> "$CONFD/custom.ini"
             done

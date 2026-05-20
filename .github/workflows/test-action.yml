@@ -133,6 +133,34 @@ jobs:
           [[ "$got" == "exec,passthru" ]] \
             || { echo "::error::disable_functions lost comma: got '$got'"; exit 1; }
 
+  ini-values-supports-quoted-values:
+    name: ini-values supports quoted values (setup-php compat)
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          # Double quotes, single quotes, and a value that contains a literal
+          # `key=value` substring (the case smart-at-boundary can't handle).
+          ini-values: memory_limit=512M, disable_functions="exec,passthru", error_log='/tmp/foo=bar.log'
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::memory_limit not 512M"; exit 1; }
+
+          got="$(php -r 'echo ini_get("disable_functions");')"
+          [[ "$got" == "exec,passthru" ]] \
+            || { echo "::error::disable_functions: got '$got'"; exit 1; }
+
+          got="$(php -r 'echo ini_get("error_log");')"
+          [[ "$got" == "/tmp/foo=bar.log" ]] \
+            || { echo "::error::error_log: got '$got'"; exit 1; }
+
   ini-values-rejects-bad-input:
     name: ini-values rejects malformed input
     runs-on: depot-ubuntu-24.04
