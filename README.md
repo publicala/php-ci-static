@@ -23,7 +23,7 @@ That's it. The action downloads the static PHP binary for the matching `latest-8
 
 When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
 
-`ini-values` accepts a comma-separated list of php.ini directives — e.g. `memory_limit=512M, opcache.enable_cli=1`. Composes with `coverage:`; both write into the same scan dir and load together.
+`ini-values` accepts php.ini directives, comma- or newline-separated — e.g. `memory_limit=512M, opcache.enable_cli=1`. Commas inside values are preserved (only commas that precede a `<directive>=` separate entries), so `disable_functions=exec,passthru` works. For values that contain `key=value`-shaped substrings, use YAML multiline. Composes with `coverage:`; both write into the same scan dir and load together.
 
 Composer (stable) is always installed alongside `php`. It's a ~2-3s download and every realistic CI job needs it, so there's no opt-out.
 
@@ -84,6 +84,17 @@ For step-debugging, override the mode inline:
 ```
 
 The action writes a `custom.ini` into its scan dir and exports `PHP_INI_SCAN_DIR`, so subsequent `php` calls pick the values up without `-d` flags. Use this for tuning that applies to the whole job; reach for `php -d key=value` for one-off overrides.
+
+For values that contain commas (`disable_functions=exec,passthru`) the inline form still works — the parser only treats a comma as a separator when it precedes `<directive>=`. For values that contain `key=value`-shaped substrings, use YAML multiline:
+
+```yaml
+- uses: publicala/php-ci-static@v1
+  with:
+    php-version: '8.4'
+    ini-values: |
+      memory_limit=512M
+      disable_functions=exec,passthru
+```
 
 ## Why
 

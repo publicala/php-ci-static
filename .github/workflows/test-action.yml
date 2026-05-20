@@ -108,6 +108,31 @@ jobs:
           ls "$RUNNER_TEMP/php-ci-static/conf.d/coverage.ini"
           ls "$RUNNER_TEMP/php-ci-static/conf.d/custom.ini"
 
+  ini-values-preserves-commas-in-values:
+    name: ini-values preserves commas inside values
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          ini-values: |
+            memory_limit=512M
+            disable_functions=exec,passthru
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::memory_limit not 512M"; exit 1; }
+
+          # The whole `exec,passthru` string survived the parser.
+          got="$(php -r 'echo ini_get("disable_functions");')"
+          [[ "$got" == "exec,passthru" ]] \
+            || { echo "::error::disable_functions lost comma: got '$got'"; exit 1; }
+
   ini-values-rejects-bad-input:
     name: ini-values rejects malformed input
     runs-on: depot-ubuntu-24.04

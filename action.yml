@@ -16,7 +16,7 @@ inputs:
     required: false
     default: 'none'
   ini-values:
-    description: 'Comma-separated PHP ini directives, e.g. "memory_limit=512M, opcache.enable_cli=1". Composes with `coverage:` — both load from the same scan dir.'
+    description: 'PHP ini directives, comma- or newline-separated. e.g. `memory_limit=512M, opcache.enable_cli=1`. Commas inside values are preserved (e.g. `disable_functions=exec,passthru`); only commas that precede a `<directive>=` are treated as separators. Composes with `coverage:` — both load from the same scan dir.'
     required: false
     default: ''
 
@@ -50,14 +50,20 @@ runs:
           exit 1
         fi
         if [[ -n "$INI_VALUES" ]]; then
-          printf '%s\n' "$INI_VALUES" | tr ',' '\n' | while IFS= read -r raw; do
-            pair="$(echo "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-            [[ -z "$pair" ]] && continue
-            if [[ ! "$pair" =~ ^[A-Za-z0-9_.]+= ]]; then
-              echo "::error::ini-values: expected '<directive>=<value>' but got '$pair'"
-              exit 1
-            fi
-          done
+          # Split on commas only when they precede a `<directive>=`, so
+          # `disable_functions=exec,passthru` stays one entry. Newlines are
+          # also separators, so callers can use YAML multiline (`|`) for
+          # values with key=value-looking substrings.
+          printf '%s\n' "$INI_VALUES" \
+            | sed -E 's/,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*=)/\n\1/g' \
+            | while IFS= read -r raw; do
+              pair="$(echo "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+              [[ -z "$pair" ]] && continue
+              if [[ ! "$pair" =~ ^[A-Za-z_][A-Za-z0-9_.]*= ]]; then
+                echo "::error::ini-values: expected '<directive>=<value>' but got '$pair'"
+                exit 1
+              fi
+            done
         fi
 
     - name: Install static PHP
@@ -128,12 +134,14 @@ runs:
 
         if [[ -n "$INI_VALUES" ]]; then
           : > "$CONFD/custom.ini"
-          printf '%s\n' "$INI_VALUES" | tr ',' '\n' | while IFS='=' read -r key val; do
-            key="$(echo "$key" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-            val="$(echo "$val" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-            [[ -z "$key" ]] && continue
-            echo "${key}=${val}" >> "$CONFD/custom.ini"
-          done
+          printf '%s\n' "$INI_VALUES" \
+            | sed -E 's/,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*=)/\n\1/g' \
+            | while IFS='=' read -r key val; do
+              key="$(echo "$key" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+              val="$(echo "$val" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+              [[ -z "$key" ]] && continue
+              echo "${key}=${val}" >> "$CONFD/custom.ini"
+            done
         fi
 
         if [[ "$COVERAGE" != "none" || -n "$INI_VALUES" ]]; then
