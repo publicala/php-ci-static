@@ -198,14 +198,18 @@ runs:
               val="$(echo "$val" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
               val="${val//$'\001'/,}"
               [[ -z "$key" ]] && continue
-              # PHP's ini parser splits unquoted values on `=` and treats
-              # `;` / `#` as inline comment markers. Wrap the value in
-              # double quotes when any of those appear, plus when the
-              # value itself contains a `"` (escaped via \"). Plain values,
-              # commas, whitespace, and PHP-constant bitmask expressions
-              # like `E_ALL & ~E_NOTICE` are left unquoted so PHP still
-              # evaluates them.
-              if [[ "$val" == *=* || "$val" == *';'* || "$val" == *'#'* || "$val" == *'"'* ]]; then
+              # PHP's ini parser truncates unquoted values on `=` and treats
+              # `;` / `#` as inline comment markers. `'` opens a
+              # single-quoted string in PHP's ini lexer too, so values like
+              # `/tmp/o'reilly.log` get cut to `/tmp/o` unless wrapped.
+              # Wrap in double quotes when any of those appear, plus when
+              # the value contains a `"` itself (escaped via \"). Plain
+              # values, commas, whitespace, and PHP-constant bitmask
+              # expressions like `E_ALL & ~E_NOTICE` are left unquoted so
+              # PHP still evaluates them.
+              if [[ "$val" == *=*       || "$val" == *';'*    \
+                 || "$val" == *'#'*     || "$val" == *'"'*    \
+                 || "$val" == *"'"* ]]; then
                 val="\"${val//\"/\\\"}\""
               fi
               echo "${key}=${val}" >> "$CONFD/custom.ini"
