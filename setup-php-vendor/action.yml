@@ -1,0 +1,80 @@
+name: Set up PHP and restore composer vendor
+description: >
+  Installs a static PHP CLI via publicala/php-ci-static and restores the
+  composer vendor cache populated by an upstream seed job. Designed for
+  fan-out CI workflows where one build job seeds vendor/ once and many
+  consumer jobs (lint, static analysis, tests) read it back.
+
+  Read-only by design. The action restores the cache and exposes the
+  resolved key; saving is the caller's responsibility (typically a single
+  `actions/cache/save@v5` step in the seed job, keyed by this action's
+  `cache-key` output for drift-free symmetry with consumers).
+
+inputs:
+  php-version:
+    description: PHP series to install. One of 8.3, 8.4, 8.5.
+    default: '8.3'
+  coverage:
+    description: Coverage driver to load (none, pcov, xdebug).
+    default: 'none'
+  ini-values:
+    description: 'php.ini directives to apply (see publicala/php-ci-static).'
+    default: ''
+  dependency-path:
+    description: >
+      File(s) to hash into the cache key. Multi-line glob list,
+      same shape `actions/cache` accepts. Defaults to composer.json
+      and composer.lock at the repo root; override for monorepos or
+      non-root composer setups.
+    default: |
+      composer.json
+      composer.lock
+  fail-on-cache-miss:
+    description: >
+      When 'true' (default), a cache miss fails the step. Consumers in
+      a fan-out topology should leave this on so a missing cache points
+      at the seed job instead of producing a vendor-less binary later.
+      Seed jobs that double as their own producer should set 'false'.
+    default: 'true'
+
+outputs:
+  cache-hit:
+    description: The string "true" when the cache was an exact match for the key.
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-key:
+    description: >
+      The resolved cache key. Reuse it verbatim in actions/cache/save@v5
+      from the seed job so producer and consumer keys cannot drift.
+    value: ${{ steps.key.outputs.value }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up PHP
+      uses: publicala/php-ci-static@v1
+      with:
+        php-version: ${{ inputs.php-version }}
+        coverage: ${{ inputs.coverage }}
+        ini-values: ${{ inputs.ini-values }}
+
+    - name: Compute cache key
+      id: key
+      shell: bash
+      env:
+        PHP_VERSION: ${{ inputs.php-version }}
+        DEPS_HASH: ${{ hashFiles(inputs.dependency-path) }}
+      run: |
+        set -euo pipefail
+        if [[ -z "$DEPS_HASH" ]]; then
+          echo "::error::dependency-path matched no files; nothing to hash into the cache key" >&2
+          exit 1
+        fi
+        echo "value=composer-${RUNNER_OS}-php-${PHP_VERSION}-${DEPS_HASH}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore vendor
+      id: restore
+      uses: actions/cache/restore@v5
+      with:
+        path: vendor
+        key: ${{ steps.key.outputs.value }}
+        fail-on-cache-miss: ${{ inputs.fail-on-cache-miss }}

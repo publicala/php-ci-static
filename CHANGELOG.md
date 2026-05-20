@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.5.0
+
+- Add sibling composite `publicala/php-ci-static/setup-php-vendor@v1`.
+  One step that installs the static PHP CLI (via the root action) and
+  restores a Composer vendor cache populated by an upstream seed job.
+  Intended for fan-out CI topologies — one build job seeds `vendor/`
+  once, many consumer jobs (lint, static analysis, tests) read it back
+  without re-running `composer install`. Read-only by design; the
+  caller saves the cache from the seed job using the exposed
+  `cache-key` output, so producer and consumer keys cannot drift.
+
+  Inputs: `php-version`, `coverage`, `ini-values` (all forwarded to
+  the root action), `dependency-path` (multi-line glob list, default
+  `composer.json` + `composer.lock`), `fail-on-cache-miss` (default
+  `'true'` — a missing cache fails the step, pointing the operator at
+  the seed job instead of producing a vendor-less binary later).
+
+  Outputs: `cache-hit` (true on exact match) and `cache-key`
+  (`composer-<runner.os>-php-<version>-<hash>`).
+
+  Non-breaking. The root `publicala/php-ci-static@v1` action is
+  unchanged.
+
 ## v1.4.0
 
 - Add `ini-values` input. Pass comma- or newline-separated `key=value`
