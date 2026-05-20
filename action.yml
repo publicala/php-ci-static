@@ -15,6 +15,10 @@ inputs:
     description: 'Coverage driver: none, pcov, or xdebug'
     required: false
     default: 'none'
+  ini-values:
+    description: 'Comma-separated PHP ini directives, e.g. "memory_limit=512M, opcache.enable_cli=1". Composes with `coverage:` — both load from the same scan dir.'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -24,6 +28,7 @@ runs:
       env:
         PHP_VERSION: ${{ inputs.php-version }}
         COVERAGE: ${{ inputs.coverage }}
+        INI_VALUES: ${{ inputs.ini-values }}
       run: |
         set -euo pipefail
         case "$PHP_VERSION" in
@@ -44,12 +49,23 @@ runs:
           echo "::error::publicala/php-ci-static only ships Linux x86_64 binaries (got $(uname -s)/$(uname -m))"
           exit 1
         fi
+        if [[ -n "$INI_VALUES" ]]; then
+          printf '%s\n' "$INI_VALUES" | tr ',' '\n' | while IFS= read -r raw; do
+            pair="$(echo "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            [[ -z "$pair" ]] && continue
+            if [[ ! "$pair" =~ ^[A-Za-z0-9_.]+= ]]; then
+              echo "::error::ini-values: expected '<directive>=<value>' but got '$pair'"
+              exit 1
+            fi
+          done
+        fi
 
     - name: Install static PHP
       shell: bash
       env:
         PHP_VERSION: ${{ inputs.php-version }}
         COVERAGE: ${{ inputs.coverage }}
+        INI_VALUES: ${{ inputs.ini-values }}
       run: |
         set -euo pipefail
 
@@ -108,13 +124,26 @@ runs:
                 "$CONFD" > "$CONFD/coverage.ini"
               ;;
           esac
+        fi
+
+        if [[ -n "$INI_VALUES" ]]; then
+          : > "$CONFD/custom.ini"
+          printf '%s\n' "$INI_VALUES" | tr ',' '\n' | while IFS='=' read -r key val; do
+            key="$(echo "$key" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            val="$(echo "$val" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            [[ -z "$key" ]] && continue
+            echo "${key}=${val}" >> "$CONFD/custom.ini"
+          done
+        fi
+
+        if [[ "$COVERAGE" != "none" || -n "$INI_VALUES" ]]; then
           echo "PHP_INI_SCAN_DIR=$CONFD" >> "$GITHUB_ENV"
         fi
 
         # $GITHUB_PATH and $GITHUB_ENV only apply to *subsequent* steps, so
         # re-export locally to make these diagnostics meaningful.
         export PATH="$BIN:$PATH"
-        if [[ "$COVERAGE" != "none" ]]; then
+        if [[ "$COVERAGE" != "none" || -n "$INI_VALUES" ]]; then
           export PHP_INI_SCAN_DIR="$CONFD"
         fi
 
