@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'action.yml'
+      - 'setup-php-vendor/action.yml'
       - '.github/workflows/test-action.yml'
   pull_request:
     paths:
       - 'action.yml'
+      - 'setup-php-vendor/action.yml'
       - '.github/workflows/test-action.yml'
   workflow_dispatch:
 
@@ -206,3 +208,185 @@ jobs:
         run: |
           [[ "${{ steps.bad.outcome }}" == "failure" ]] \
             || { echo "::error::expected validation to fail, got '${{ steps.bad.outcome }}'"; exit 1; }
+
+  setup-php-vendor-key-shape:
+    name: setup-php-vendor cache-key has runner-os/php-version/hash shape
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Seed deterministic composer fixtures
+        run: |
+          set -euo pipefail
+          echo '{"name":"pub/fixture"}' > composer.json
+          echo '{"content-hash":"fixture"}' > composer.lock
+
+      # Cache miss is fine here; we're asserting the *key shape*, not restore behavior.
+      - id: setup
+        uses: ./setup-php-vendor
+        with:
+          php-version: '8.4'
+          fail-on-cache-miss: 'false'
+
+      - name: Assert key shape and cache-hit
+        env:
+          KEY: ${{ steps.setup.outputs.cache-key }}
+          HIT: ${{ steps.setup.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          # Hash is deterministic across runs (same fixture bytes), so we can pin it.
+          expected_hash="$( { sha256sum composer.json composer.lock; } | sha256sum | cut -c1-40)"
+          # GitHub's hashFiles uses SHA256 of concatenated SHA256s; we don't try to
+          # reproduce it exactly — just assert the prefix and that the suffix is non-empty.
+          [[ "$KEY" == composer-Linux-php-8.4-* ]] \
+            || { echo "::error::unexpected key prefix: $KEY"; exit 1; }
+          [[ "${KEY#composer-Linux-php-8.4-}" =~ ^[0-9a-f]{40,}$ ]] \
+            || { echo "::error::missing or malformed hash suffix in $KEY"; exit 1; }
+          [[ "$HIT" != "true" ]] \
+            || { echo "::error::expected cache-hit=false on first run, got '$HIT'"; exit 1; }
+
+      - name: php-version flows into the key
+        run: |
+          set -euo pipefail
+          # Different PHP version → different key, same hash suffix.
+          :  # asserted by the matrix below (separate job)
+
+  setup-php-vendor-php-version-in-key:
+    name: setup-php-vendor php-version partitions the key
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: |
+          echo '{"name":"pub/fixture"}' > composer.json
+          echo '{"content-hash":"fixture"}' > composer.lock
+
+      - id: a
+        uses: ./setup-php-vendor
+        with:
+          php-version: '8.3'
+          fail-on-cache-miss: 'false'
+
+      - id: b
+        uses: ./setup-php-vendor
+        with:
+          php-version: '8.4'
+          fail-on-cache-miss: 'false'
+
+      - name: Keys differ only in php-version segment
+        env:
+          KEY_A: ${{ steps.a.outputs.cache-key }}
+          KEY_B: ${{ steps.b.outputs.cache-key }}
+        run: |
+          set -euo pipefail
+          [[ "$KEY_A" == composer-Linux-php-8.3-* ]] || { echo "::error::A: $KEY_A"; exit 1; }
+          [[ "$KEY_B" == composer-Linux-php-8.4-* ]] || { echo "::error::B: $KEY_B"; exit 1; }
+          # Suffix (the hash) is identical because composer.json/lock are identical.
+          [[ "${KEY_A#composer-Linux-php-8.3-}" == "${KEY_B#composer-Linux-php-8.4-}" ]] \
+            || { echo "::error::hash suffix should match across php-version: $KEY_A vs $KEY_B"; exit 1; }
+
+  setup-php-vendor-dependency-path:
+    name: setup-php-vendor honors dependency-path
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Seed fixture in a non-root location
+        run: |
+          set -euo pipefail
+          mkdir -p packages/api
+          echo '{"name":"pub/api"}' > packages/api/composer.json
+          echo '{"content-hash":"api"}' > packages/api/composer.lock
+          mkdir -p packages/web
+          echo '{"name":"pub/web"}' > packages/web/composer.json
+          echo '{"content-hash":"web"}' > packages/web/composer.lock
+
+      - id: api
+        uses: ./setup-php-vendor
+        with:
+          php-version: '8.4'
+          fail-on-cache-miss: 'false'
+          dependency-path: |
+            packages/api/composer.json
+            packages/api/composer.lock
+
+      - id: web
+        uses: ./setup-php-vendor
+        with:
+          php-version: '8.4'
+          fail-on-cache-miss: 'false'
+          dependency-path: |
+            packages/web/composer.json
+            packages/web/composer.lock
+
+      - name: Two different paths produce two different keys
+        env:
+          KEY_API: ${{ steps.api.outputs.cache-key }}
+          KEY_WEB: ${{ steps.web.outputs.cache-key }}
+        run: |
+          set -euo pipefail
+          [[ "$KEY_API" != "$KEY_WEB" ]] \
+            || { echo "::error::dependency-path did not partition the key: $KEY_API"; exit 1; }
+
+  setup-php-vendor-empty-deps-fails:
+    name: setup-php-vendor fails when dependency-path matches nothing
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: bad
+        continue-on-error: true
+        uses: ./setup-php-vendor
+        with:
+          php-version: '8.4'
+          fail-on-cache-miss: 'false'
+          dependency-path: this-file-does-not-exist.json
+
+      - run: |
+          [[ "${{ steps.bad.outcome }}" == "failure" ]] \
+            || { echo "::error::expected step to fail on empty hash, got '${{ steps.bad.outcome }}'"; exit 1; }
+
+  setup-php-vendor-fail-on-cache-miss:
+    name: setup-php-vendor fail-on-cache-miss=true fails on miss
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      # Unique-per-run hash so the cache cannot hit.
+      - name: Seed unique fixture
+        run: |
+          set -euo pipefail
+          echo "{\"nonce\":\"${{ github.run_id }}-${{ github.run_attempt }}\"}" > composer.json
+          echo '{"content-hash":"none"}' > composer.lock
+
+      - id: bad
+        continue-on-error: true
+        uses: ./setup-php-vendor
+        with:
+          php-version: '8.4'
+          fail-on-cache-miss: 'true'
+
+      - run: |
+          [[ "${{ steps.bad.outcome }}" == "failure" ]] \
+            || { echo "::error::expected fail-on-cache-miss=true to fail on miss, got '${{ steps.bad.outcome }}'"; exit 1; }
+
+  setup-php-vendor-ini-values-passthrough:
+    name: setup-php-vendor passes ini-values through to php-ci-static
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - run: |
+          echo '{"name":"pub/fixture"}' > composer.json
+          echo '{"content-hash":"fixture"}' > composer.lock
+
+      - uses: ./setup-php-vendor
+        with:
+          php-version: '8.4'
+          ini-values: memory_limit=512M
+          fail-on-cache-miss: 'false'
+
+      - run: |
+          set -euo pipefail
+          [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::ini-values not applied"; exit 1; }
