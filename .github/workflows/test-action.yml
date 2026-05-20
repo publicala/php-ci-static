@@ -74,3 +74,52 @@ jobs:
           [[ "$(command -v composer)" == "$ACTION_COMPOSER" ]] \
             || { echo "::error::PATH resolves to $(command -v composer), expected $ACTION_COMPOSER"; exit 1; }
           composer --version | grep -F "Composer version"
+
+  ini-values:
+    name: ini-values composes with coverage
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          coverage: pcov
+          ini-values: memory_limit=512M, opcache.enable_cli=1
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          # custom.ini applied
+          [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::memory_limit not 512M"; exit 1; }
+          [[ "$(php -r 'echo ini_get("opcache.enable_cli");')" == "1" ]] \
+            || { echo "::error::opcache.enable_cli not 1"; exit 1; }
+
+          # Coverage still loaded alongside the custom ini.
+          php -r 'exit(extension_loaded("pcov") ? 0 : 1);'
+
+          # Both files live in the scan dir.
+          php --ini | grep -F "$RUNNER_TEMP/php-ci-static/conf.d"
+          ls "$RUNNER_TEMP/php-ci-static/conf.d/coverage.ini"
+          ls "$RUNNER_TEMP/php-ci-static/conf.d/custom.ini"
+
+  ini-values-rejects-bad-input:
+    name: ini-values rejects malformed input
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Bad directive name fails validation
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          php-version: '8.4'
+          ini-values: not a directive=value
+
+      - name: Assert the previous step failed
+        run: |
+          [[ "${{ steps.bad.outcome }}" == "failure" ]] \
+            || { echo "::error::expected validation to fail, got '${{ steps.bad.outcome }}'"; exit 1; }
