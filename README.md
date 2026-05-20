@@ -23,6 +23,8 @@ That's it. The action downloads the static PHP binary for the matching `latest-8
 
 When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
 
+The action also drops a baseline `memory_limit=-1` into the scan dir on every run, so CI workloads (PHPCS, PHPStan, PHPUnit on Laravel-sized codebases) don't hit the static binary's compiled-in 128M default. Override with `ini-values: memory_limit=512M` (or any other value) if you want a cap.
+
 `ini-values` accepts php.ini directives, comma- or newline-separated — e.g. `memory_limit=512M, opcache.enable_cli=1`. Two ways to handle commas inside values: wrap the value in single or double quotes (`disable_functions="exec,passthru"`, matching `shivammathur/setup-php`), or rely on the smart-split fallback that treats a comma as a separator only when it precedes a `<directive>=` (so unquoted `disable_functions=exec,passthru` also works). Quote when the value contains `key=value`-shaped substrings (`error_log='/tmp/foo=bar.log'`). Composes with `coverage:`; both write into the same scan dir and load together.
 
 Composer (stable) is always installed alongside `php`. It's a ~2-3s download and every realistic CI job needs it, so there's no opt-out.
@@ -218,6 +220,8 @@ php -v
 ```
 
 Piping the matching line into `sha256sum -c` (rather than `sha256sum -c SHA256SUMS --ignore-missing`) guarantees the check actually ran — `--ignore-missing` would exit 0 even if nothing matched.
+
+The binary ships with the upstream `php.ini-*` `memory_limit=128M` default, tuned for shared-hosting web SAPIs and well under what PHPCS / PHPStan / PHPUnit need on a real Laravel codebase. The composite action handles this transparently; for raw shell, pass `php -d memory_limit=-1 …` (or drop a `memory_limit=-1` ini into a directory and point `PHP_INI_SCAN_DIR` at it).
 
 For coverage, download the `.so` and load it via `-d`:
 

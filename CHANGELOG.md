@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.5.1
+
+- Set `memory_limit=-1` as a baseline ini default in the composite
+  action's scan dir. The static binary's compiled-in default is
+  `memory_limit=128M` (the upstream `php.ini-*` template value, tuned
+  for shared-hosting web SAPIs), but Ubuntu's php-cli ships
+  `memory_limit=-1` and every realistic CI workload — PHPCS, PHPStan,
+  PHPUnit on Laravel-sized codebases — exceeds 128M. The 128M default
+  surfaced as PHPCS silently exiting 255 mid-run on consumers like
+  `tightenco/duster`, which wraps PHPCS in `ob_start()`; the OOM fatal
+  was buffered and never flushed, leaving CI logs cut off after the
+  "Linting using PHP_CodeSniffer" banner with no visible error.
+
+  The baseline ini is loaded first by alphabetical scan order
+  (`00-ci-defaults.ini`), so user `ini-values` (`custom.ini`) and
+  `coverage` (`coverage.ini`) still win — `ini-values: memory_limit=512M`
+  keeps doing exactly what it always did. `PHP_INI_SCAN_DIR` is now
+  exported on every run (previously only when `coverage` or
+  `ini-values` was set). Non-breaking.
+
 ## v1.5.0
 
 - Add sibling composite `publicala/php-ci-static/setup-php-vendor@v1`.
