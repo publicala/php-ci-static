@@ -19,8 +19,11 @@ That's it. The action downloads the static PHP binary for the matching `latest-8
 |-------|----------|---------|-----------------|
 | `php-version` | yes | — | `8.3`, `8.4`, `8.5` |
 | `coverage` | no | `none` | `none`, `pcov`, `xdebug` |
+| `ini-values` | no | `''` | Comma-separated `key=value` pairs |
 
 When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
+
+`ini-values` accepts a comma-separated list of php.ini directives — e.g. `memory_limit=512M, opcache.enable_cli=1`. Composes with `coverage:`; both write into the same scan dir and load together.
 
 Composer (stable) is always installed alongside `php`. It's a ~2-3s download and every realistic CI job needs it, so there's no opt-out.
 
@@ -68,6 +71,19 @@ For step-debugging, override the mode inline:
 ```yaml
 - run: php -d xdebug.mode=debug,coverage vendor/bin/pest --coverage
 ```
+
+### Custom php.ini directives
+
+```yaml
+- uses: publicala/php-ci-static@v1
+  with:
+    php-version: '8.4'
+    ini-values: memory_limit=512M, opcache.enable_cli=1
+
+- run: vendor/bin/phpstan analyse
+```
+
+The action writes a `custom.ini` into its scan dir and exports `PHP_INI_SCAN_DIR`, so subsequent `php` calls pick the values up without `-d` flags. Use this for tuning that applies to the whole job; reach for `php -d key=value` for one-off overrides.
 
 ## Why
 
