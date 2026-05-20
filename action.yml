@@ -15,6 +15,10 @@ inputs:
     description: 'Coverage driver: none, pcov, or xdebug'
     required: false
     default: 'none'
+  ini-values:
+    description: 'PHP ini directives, comma- or newline-separated. e.g. `memory_limit=512M, opcache.enable_cli=1`. Values may contain commas in two ways: wrap the value in single or double quotes (`disable_functions="exec,passthru"`) — matches `shivammathur/setup-php` — or rely on the smart-split fallback, which only treats commas that precede a `<directive>=` as separators (so unquoted `disable_functions=exec,passthru` also works). Composes with `coverage:` — both load from the same scan dir.'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -24,6 +28,7 @@ runs:
       env:
         PHP_VERSION: ${{ inputs.php-version }}
         COVERAGE: ${{ inputs.coverage }}
+        INI_VALUES: ${{ inputs.ini-values }}
       run: |
         set -euo pipefail
         case "$PHP_VERSION" in
@@ -44,12 +49,61 @@ runs:
           echo "::error::publicala/php-ci-static only ships Linux x86_64 binaries (got $(uname -s)/$(uname -m))"
           exit 1
         fi
+        if [[ -n "$INI_VALUES" ]]; then
+          # Two-pass parser:
+          #   1. awk treats `'` / `"` as quote delimiters ONLY when they sit at
+          #      "value-start" position (right after `=`, optionally past
+          #      whitespace). Quotes appearing later in a value are kept
+          #      literal — so `error_log=/tmp/o'reilly.log` stays intact.
+          #      Inside a quoted value, commas are replaced with \001 and
+          #      the surrounding quote chars are stripped.
+          #   2. sed splits on commas that precede a `<directive>=`, so the
+          #      unquoted form (`disable_functions=exec,passthru`) also stays
+          #      one entry. Newlines are separators too (YAML multiline).
+          # The \001 sentinel is restored to a literal comma when writing the
+          # ini file in the install step; here we just check shape.
+          printf '%s\n' "$INI_VALUES" \
+            | awk '
+              BEGIN { sq = sprintf("%c", 39); dq = sprintf("%c", 34); s = sprintf("%c", 1) }
+              {
+                out = ""; q = ""; at_val_start = 0; n = length($0)
+                for (i = 1; i <= n; i++) {
+                  c = substr($0, i, 1)
+                  if (q != "") {
+                    if (c == q) { q = ""; at_val_start = 0; continue }
+                    if (c == ",") c = s
+                    out = out c
+                    continue
+                  }
+                  if (at_val_start) {
+                    if (c == sq || c == dq) { q = c; at_val_start = 0; continue }
+                    if (c == " " || c == "\t") { out = out c; continue }
+                    out = out c; at_val_start = 0; continue
+                  }
+                  out = out c
+                  if (c == "=") at_val_start = 1
+                }
+                print out
+              }' \
+            | sed -E 's/,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*=)/\n\1/g' \
+            | while IFS= read -r raw; do
+              pair="$(echo "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+              [[ -z "$pair" ]] && continue
+              if [[ ! "$pair" =~ ^[A-Za-z_][A-Za-z0-9_.]*= ]]; then
+                # Restore sentinel commas so the error message shows the input
+                # as the user wrote it (minus the stripped quote chars).
+                echo "::error::ini-values: expected '<directive>=<value>' but got '${pair//$'\001'/,}'"
+                exit 1
+              fi
+            done
+        fi
 
     - name: Install static PHP
       shell: bash
       env:
         PHP_VERSION: ${{ inputs.php-version }}
         COVERAGE: ${{ inputs.coverage }}
+        INI_VALUES: ${{ inputs.ini-values }}
       run: |
         set -euo pipefail
 
@@ -108,13 +162,68 @@ runs:
                 "$CONFD" > "$CONFD/coverage.ini"
               ;;
           esac
+        fi
+
+        if [[ -n "$INI_VALUES" ]]; then
+          : > "$CONFD/custom.ini"
+          # See the matching block in the Validate step for the parser shape.
+          # Here we additionally restore the \001 sentinel back to a literal
+          # comma in the value before writing the ini file.
+          printf '%s\n' "$INI_VALUES" \
+            | awk '
+              BEGIN { sq = sprintf("%c", 39); dq = sprintf("%c", 34); s = sprintf("%c", 1) }
+              {
+                out = ""; q = ""; at_val_start = 0; n = length($0)
+                for (i = 1; i <= n; i++) {
+                  c = substr($0, i, 1)
+                  if (q != "") {
+                    if (c == q) { q = ""; at_val_start = 0; continue }
+                    if (c == ",") c = s
+                    out = out c
+                    continue
+                  }
+                  if (at_val_start) {
+                    if (c == sq || c == dq) { q = c; at_val_start = 0; continue }
+                    if (c == " " || c == "\t") { out = out c; continue }
+                    out = out c; at_val_start = 0; continue
+                  }
+                  out = out c
+                  if (c == "=") at_val_start = 1
+                }
+                print out
+              }' \
+            | sed -E 's/,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*=)/\n\1/g' \
+            | while IFS='=' read -r key val; do
+              key="$(echo "$key" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+              val="$(echo "$val" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+              val="${val//$'\001'/,}"
+              [[ -z "$key" ]] && continue
+              # PHP's ini parser truncates unquoted values on `=` and treats
+              # `;` / `#` as inline comment markers. `'` opens a
+              # single-quoted string in PHP's ini lexer too, so values like
+              # `/tmp/o'reilly.log` get cut to `/tmp/o` unless wrapped.
+              # Wrap in double quotes when any of those appear, plus when
+              # the value contains a `"` itself (escaped via \"). Plain
+              # values, commas, whitespace, and PHP-constant bitmask
+              # expressions like `E_ALL & ~E_NOTICE` are left unquoted so
+              # PHP still evaluates them.
+              if [[ "$val" == *=*       || "$val" == *';'*    \
+                 || "$val" == *'#'*     || "$val" == *'"'*    \
+                 || "$val" == *"'"* ]]; then
+                val="\"${val//\"/\\\"}\""
+              fi
+              echo "${key}=${val}" >> "$CONFD/custom.ini"
+            done
+        fi
+
+        if [[ "$COVERAGE" != "none" || -n "$INI_VALUES" ]]; then
           echo "PHP_INI_SCAN_DIR=$CONFD" >> "$GITHUB_ENV"
         fi
 
         # $GITHUB_PATH and $GITHUB_ENV only apply to *subsequent* steps, so
         # re-export locally to make these diagnostics meaningful.
         export PATH="$BIN:$PATH"
-        if [[ "$COVERAGE" != "none" ]]; then
+        if [[ "$COVERAGE" != "none" || -n "$INI_VALUES" ]]; then
           export PHP_INI_SCAN_DIR="$CONFD"
         fi
 

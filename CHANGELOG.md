@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.4.0
+
+- Add `ini-values` input. Pass comma- or newline-separated `key=value`
+  pairs to set arbitrary php.ini directives (`memory_limit=512M,
+  opcache.enable_cli=1`, etc.) without writing files into the
+  action's internal scan dir. Mirrors `shivammathur/setup-php`'s
+  `ini-values` shape, including quoted values for commas inside
+  values (`disable_functions="exec,passthru"`). Also accepts the
+  bare form (`disable_functions=exec,passthru`) — the parser only
+  treats a comma as a separator when it precedes a `<directive>=`,
+  which setup-php itself does not. Composes with `coverage:` — both
+  load from the same `PHP_INI_SCAN_DIR`. Directive names are
+  validated, so a typo fails the step instead of producing a
+  silently-ignored ini file. Non-breaking.
+
 ## v1.3.0
 
 - Static PHP binaries now include `imagick`. This keeps Laravel CI jobs

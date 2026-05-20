@@ -12,6 +12,9 @@ on:
       - '.github/workflows/test-action.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: test-action-${{ github.ref }}
   cancel-in-progress: true
@@ -74,3 +77,132 @@ jobs:
           [[ "$(command -v composer)" == "$ACTION_COMPOSER" ]] \
             || { echo "::error::PATH resolves to $(command -v composer), expected $ACTION_COMPOSER"; exit 1; }
           composer --version | grep -F "Composer version"
+
+  ini-values:
+    name: ini-values composes with coverage
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          coverage: pcov
+          ini-values: memory_limit=512M, opcache.enable_cli=1
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          # custom.ini applied
+          [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::memory_limit not 512M"; exit 1; }
+          [[ "$(php -r 'echo ini_get("opcache.enable_cli");')" == "1" ]] \
+            || { echo "::error::opcache.enable_cli not 1"; exit 1; }
+
+          # Coverage still loaded alongside the custom ini.
+          php -r 'exit(extension_loaded("pcov") ? 0 : 1);'
+
+          # Both files live in the scan dir.
+          php --ini | grep -F "$RUNNER_TEMP/php-ci-static/conf.d"
+          ls "$RUNNER_TEMP/php-ci-static/conf.d/coverage.ini"
+          ls "$RUNNER_TEMP/php-ci-static/conf.d/custom.ini"
+
+  ini-values-preserves-commas-in-values:
+    name: ini-values preserves commas inside values
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          ini-values: |
+            memory_limit=512M
+            disable_functions=exec,passthru
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::memory_limit not 512M"; exit 1; }
+
+          # The whole `exec,passthru` string survived the parser.
+          got="$(php -r 'echo ini_get("disable_functions");')"
+          [[ "$got" == "exec,passthru" ]] \
+            || { echo "::error::disable_functions lost comma: got '$got'"; exit 1; }
+
+  ini-values-supports-quoted-values:
+    name: ini-values supports quoted values (setup-php compat)
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          # Double quotes, single quotes, and a value that contains a literal
+          # `key=value` substring (the case smart-at-boundary can't handle).
+          ini-values: memory_limit=512M, disable_functions="exec,passthru", error_log='/tmp/foo=bar.log'
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::memory_limit not 512M"; exit 1; }
+
+          got="$(php -r 'echo ini_get("disable_functions");')"
+          [[ "$got" == "exec,passthru" ]] \
+            || { echo "::error::disable_functions: got '$got'"; exit 1; }
+
+          got="$(php -r 'echo ini_get("error_log");')"
+          [[ "$got" == "/tmp/foo=bar.log" ]] \
+            || { echo "::error::error_log: got '$got'"; exit 1; }
+
+  ini-values-preserves-literal-quote-chars:
+    name: ini-values preserves apostrophes inside values
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          # `'` appears inside an unquoted value — must not be treated as a
+          # quote delimiter. Same for a literal `"` further down.
+          ini-values: |
+            error_log=/tmp/o'reilly.log
+            sendmail_path=/usr/sbin/sendmail -t -i
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          got="$(php -r 'echo ini_get("error_log");')"
+          [[ "$got" == "/tmp/o'reilly.log" ]] \
+            || { echo "::error::error_log lost apostrophe: got '$got'"; exit 1; }
+
+          got="$(php -r 'echo ini_get("sendmail_path");')"
+          [[ "$got" == "/usr/sbin/sendmail -t -i" ]] \
+            || { echo "::error::sendmail_path: got '$got'"; exit 1; }
+
+  ini-values-rejects-bad-input:
+    name: ini-values rejects malformed input
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Bad directive name fails validation
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          php-version: '8.4'
+          ini-values: not a directive=value
+
+      - name: Assert the previous step failed
+        run: |
+          [[ "${{ steps.bad.outcome }}" == "failure" ]] \
+            || { echo "::error::expected validation to fail, got '${{ steps.bad.outcome }}'"; exit 1; }
