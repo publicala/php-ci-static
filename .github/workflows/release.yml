@@ -1,0 +1,150 @@
+name: Release
+
+# Cuts an action release whenever CHANGELOG.md gains a new `## vX.Y.Z`
+# header on main. Source of truth is the top header; the workflow:
+#   1. Validates the header shape (also runs on PR so format drift fails fast).
+#   2. Reads the version, skips if the immutable tag already exists (idempotent).
+#   3. Extracts the markdown block between this header and the next `## v` for
+#      release notes.
+#   4. Creates the immutable `vX.Y.Z` tag, force-moves the sliding `vX` tag to
+#      the release commit, and publishes a GitHub Release with the notes.
+#
+# Trigger is path-filtered to CHANGELOG.md so unrelated pushes are a no-op.
+# `workflow_dispatch` is exposed for manual cuts (e.g., retroactive release of
+# a version that landed before this automation existed).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CHANGELOG.md'
+      - '.github/workflows/release.yml'
+  pull_request:
+    paths:
+      - 'CHANGELOG.md'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate changelog header
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check top header shape
+        run: |
+          set -euo pipefail
+          header=$(grep -m1 -E '^## ' CHANGELOG.md || true)
+          if [[ -z "$header" ]]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## ' header"
+            exit 1
+          fi
+          if ! [[ "$header" =~ ^##\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=CHANGELOG.md::Top header must be '## vX.Y.Z' exactly (got: $header)"
+            exit 1
+          fi
+          echo "OK: $header"
+
+  release:
+    name: Cut release
+    needs: validate
+    # Only run on push to main and on manual dispatch; PRs stop at validate.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need full history + tags so we can check if vX.Y.Z already exists.
+          fetch-depth: 0
+
+      - name: Read top version
+        id: ver
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | sed 's/^## v//')
+          major=${version%%.*}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+          echo "Top version: v$version (major: v$major)"
+
+      - name: Check tag exists (idempotency gate)
+        id: check
+        run: |
+          set -euo pipefail
+          version=${{ steps.ver.outputs.version }}
+          if git rev-parse --verify "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "v$version already tagged at $(git rev-parse v$version) - skipping"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "v$version is new - will cut release"
+          fi
+
+      - name: Extract release notes
+        if: steps.check.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Block from `## v<version>` up to (not including) the next `## ` header
+          # of any kind. Stopping on `## ` (not just `## vX.Y.Z`) keeps trailing
+          # non-version sections like `## Versioning` from leaking into the
+          # release notes when the requested version happens to be the
+          # bottom-most one in the file.
+          # Strips leading/trailing blank lines so the GitHub Release body is tight.
+          awk -v ver="$VERSION" '
+            BEGIN { capture = 0 }
+            /^## / {
+              if (capture) exit
+              if ($0 == "## v" ver) { capture = 1; next }
+            }
+            capture { print }
+          ' CHANGELOG.md \
+            | awk 'NF { found=1 } found' \
+            | awk '{ lines[NR] = $0 } END { last = NR; while (last > 0 && lines[last] == "") last--; for (i = 1; i <= last; i++) print lines[i] }' \
+            > release-notes.md
+          echo "::group::release-notes.md"
+          cat release-notes.md
+          echo "::endgroup::"
+
+      - name: Tag + release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          MAJOR: ${{ steps.ver.outputs.major }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Immutable per-version tag, pushed to remote.
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "v$VERSION"
+
+          # Sliding major tag (`v1`) — force-move to the release commit.
+          # Use the git refs API: PATCH if it exists, POST otherwise. This
+          # matches the pattern used by `build.yml` for `latest-X.Y` tags.
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            echo "Moved sliding tag v$MAJOR -> $GITHUB_SHA"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/v$MAJOR" -f sha="$GITHUB_SHA" >/dev/null
+            echo "Created sliding tag v$MAJOR at $GITHUB_SHA"
+          fi
+
+          # GitHub Release pinned to the immutable tag.
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file release-notes.md
