@@ -3,15 +3,16 @@ name: Release
 # Cuts an action release whenever CHANGELOG.md gains a new `## vX.Y.Z`
 # header on main. Source of truth is the top header; the workflow:
 #   1. Validates the header shape (also runs on PR so format drift fails fast).
-#   2. Reads the version, skips if the immutable tag already exists (idempotent).
-#   3. Extracts the markdown block between this header and the next `## v` for
-#      release notes.
-#   4. Creates the immutable `vX.Y.Z` tag, force-moves the sliding `vX` tag to
-#      the release commit, and publishes a GitHub Release with the notes.
+#   2. Guards that PRs touching action.yml also bump the CHANGELOG header.
+#   3. Per-artifact idempotency: each of {immutable tag, sliding tag,
+#      GitHub Release} is reconciled independently, so a partial failure
+#      in any one step can be repaired by re-running the workflow.
+#   4. Extracts the markdown block between the matching version header and
+#      the next `## ` header of any kind for release notes.
 #
 # Trigger is path-filtered to CHANGELOG.md so unrelated pushes are a no-op.
-# `workflow_dispatch` is exposed for manual cuts (e.g., retroactive release of
-# a version that landed before this automation existed).
+# `workflow_dispatch` is exposed for retroactive releases — pass `--ref`
+# to point at the actual release commit if main has moved on.
 
 on:
   push:
@@ -22,6 +23,8 @@ on:
   pull_request:
     paths:
       - 'CHANGELOG.md'
+      - 'action.yml'
+      - 'setup-php-vendor/action.yml'
       - '.github/workflows/release.yml'
   workflow_dispatch:
 
@@ -53,16 +56,56 @@ jobs:
           fi
           echo "OK: $header"
 
-  release:
-    name: Cut release
-    needs: validate
-    # Only run on push to main and on manual dispatch; PRs stop at validate.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+  guard-changelog-bump:
+    name: Guard CHANGELOG bump when action.yml changes
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
-          # Need full history + tags so we can check if vX.Y.Z already exists.
+          # Need both PR head and base for the diff and the base-CHANGELOG read.
+          fetch-depth: 0
+
+      - name: Check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE_SHA...HEAD" -- action.yml setup-php-vendor/action.yml)
+          if [[ -z "$changed" ]]; then
+            echo "No action.yml changes in this PR — bump guard not applicable."
+            exit 0
+          fi
+          echo "PR modifies composite action files:"
+          printf '  - %s\n' $changed
+
+          head_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | sed 's/^## v//')
+          # `git show base:CHANGELOG.md` reads the file as it stood on the PR base.
+          base_version=$(git show "$BASE_SHA:CHANGELOG.md" \
+            | grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sed 's/^## v//')
+
+          echo "Top version on base ($BASE_SHA): v$base_version"
+          echo "Top version on PR head:          v$head_version"
+
+          if [[ "$head_version" == "$base_version" ]]; then
+            echo "::error file=CHANGELOG.md::Composite action files changed but the top CHANGELOG header is still v$head_version. Add a new '## vX.Y.Z' block at the top of CHANGELOG.md (see the Versioning section at the bottom for the semver rules) so the release workflow can publish your change."
+            exit 1
+          fi
+          echo "OK: bumped v$base_version -> v$head_version"
+
+  release:
+    name: Cut release
+    needs: validate
+    # Hard-gate to main only. Without the ref check, a maintainer dispatching
+    # the workflow from a feature branch would publish vX.Y.Z and move vX
+    # from unmerged code. Codex flagged this — keep it.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history + tags so we can peel vX.Y.Z to its commit locally.
           fetch-depth: 0
 
       - name: Read top version
@@ -75,31 +118,40 @@ jobs:
           echo "major=$major" >> "$GITHUB_OUTPUT"
           echo "Top version: v$version (major: v$major)"
 
-      - name: Check tag exists (idempotency gate)
-        id: check
-        run: |
-          set -euo pipefail
-          version=${{ steps.ver.outputs.version }}
-          if git rev-parse --verify "refs/tags/v$version" >/dev/null 2>&1; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "v$version already tagged at $(git rev-parse v$version) - skipping"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "v$version is new - will cut release"
-          fi
-
-      - name: Extract release notes
-        if: steps.check.outputs.skip == 'false'
+      - name: Check immutable tag state
+        id: tag
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          # Block from `## v<version>` up to (not including) the next `## ` header
-          # of any kind. Stopping on `## ` (not just `## vX.Y.Z`) keeps trailing
-          # non-version sections like `## Versioning` from leaking into the
-          # release notes when the requested version happens to be the
-          # bottom-most one in the file.
-          # Strips leading/trailing blank lines so the GitHub Release body is tight.
+          # Three outcomes:
+          #   absent          → create it on this commit
+          #   present_here    → tag already exists at GITHUB_SHA, reconcile
+          #                      downstream artifacts (sliding tag, release).
+          #                      Partial-failure recovery path.
+          #   present_elsewhere → tag exists at a different commit, this push
+          #                       is not a release (typo fix to old notes,
+          #                       etc.) → no-op the whole job.
+          if ! git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "state=absent" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION does not exist yet — will create."
+            exit 0
+          fi
+          tag_commit=$(git rev-list -n 1 "v$VERSION")
+          if [[ "$tag_commit" == "$GITHUB_SHA" ]]; then
+            echo "state=present_here" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION already at $GITHUB_SHA — reconciling downstream artifacts."
+          else
+            echo "state=present_elsewhere" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION already at $tag_commit (not current $GITHUB_SHA) — this push is not a release. No-op."
+          fi
+
+      - name: Extract release notes
+        if: steps.tag.outputs.state != 'present_elsewhere'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
           awk -v ver="$VERSION" '
             BEGIN { capture = 0 }
             /^## / {
@@ -115,36 +167,53 @@ jobs:
           cat release-notes.md
           echo "::endgroup::"
 
-      - name: Tag + release
-        if: steps.check.outputs.skip == 'false'
+      - name: Create immutable tag
+        if: steps.tag.outputs.state == 'absent'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "v$VERSION"
+          echo "Tagged v$VERSION at $GITHUB_SHA"
+
+      - name: Move sliding tag
+        if: steps.tag.outputs.state != 'present_elsewhere'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
           MAJOR: ${{ steps.ver.outputs.major }}
         run: |
           set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Immutable per-version tag, pushed to remote.
-          git tag -a "v$VERSION" -m "v$VERSION"
-          git push origin "v$VERSION"
-
-          # Sliding major tag (`v1`) — force-move to the release commit.
-          # Use the git refs API: PATCH if it exists, POST otherwise. This
-          # matches the pattern used by `build.yml` for `latest-X.Y` tags.
-          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" \
-              -f sha="$GITHUB_SHA" -F force=true >/dev/null
-            echo "Moved sliding tag v$MAJOR -> $GITHUB_SHA"
-          else
+          # Idempotent: if the sliding tag already points at GITHUB_SHA, no-op.
+          # Otherwise force-move (PATCH) or create (POST). Same shape build.yml
+          # uses for the latest-X.Y tags.
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" --jq .object.sha 2>/dev/null || true)
+          if [[ -z "$current" ]]; then
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f ref="refs/tags/v$MAJOR" -f sha="$GITHUB_SHA" >/dev/null
             echo "Created sliding tag v$MAJOR at $GITHUB_SHA"
+          elif [[ "$current" == "$GITHUB_SHA" ]]; then
+            echo "Sliding tag v$MAJOR already at $GITHUB_SHA — no-op"
+          else
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            echo "Moved sliding tag v$MAJOR: $current → $GITHUB_SHA"
           fi
 
-          # GitHub Release pinned to the immutable tag.
+      - name: Create GitHub Release
+        if: steps.tag.outputs.state != 'present_elsewhere'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists — no-op"
+            exit 0
+          fi
           gh release create "v$VERSION" \
             --title "v$VERSION" \
             --notes-file release-notes.md
+          echo "Published release v$VERSION"
