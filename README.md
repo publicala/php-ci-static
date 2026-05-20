@@ -101,6 +101,52 @@ ini-values: |
   error_log='/tmp/foo=bar.log'
 ```
 
+## Sibling composite: `setup-php-vendor`
+
+For fan-out CI topologies — one build job seeds `vendor/`, many consumer jobs (lint, phpstan, tests) read it back — `publicala/php-ci-static/setup-php-vendor@v1` bundles the PHP install with a Composer vendor restore in one step:
+
+```yaml
+# Seed (build) job — runs composer install, saves the cache under the
+# composite's resolved key.
+build:
+  runs-on: depot-ubuntu-24.04
+  steps:
+    - uses: actions/checkout@v6
+    - id: setup
+      uses: publicala/php-ci-static/setup-php-vendor@v1
+      with:
+        php-version: '8.4'
+        fail-on-cache-miss: 'false'   # seed job: a miss is expected
+    - if: steps.setup.outputs.cache-hit != 'true'
+      run: composer install --no-progress --prefer-dist --no-interaction
+    - if: steps.setup.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: vendor
+        key: ${{ steps.setup.outputs.cache-key }}
+
+# Consumer (fan-out) jobs — install PHP and restore vendor in one step.
+test:
+  needs: build
+  runs-on: depot-ubuntu-24.04
+  steps:
+    - uses: actions/checkout@v6
+    - uses: publicala/php-ci-static/setup-php-vendor@v1
+      with:
+        php-version: '8.4'
+        coverage: pcov
+        ini-values: memory_limit=512M
+    - run: vendor/bin/pest --coverage
+```
+
+Inputs: `php-version`, `coverage`, `ini-values` (all forwarded to the root action), plus `dependency-path` (multi-line glob list, defaults to `composer.json` + `composer.lock`) and `fail-on-cache-miss` (default `'true'`; consumer-side a missing cache hard-fails so the operator is pointed at the seed job instead of seeing a vendor-less binary later).
+
+Outputs: `cache-hit` (true on exact match) and `cache-key` (`composer-<runner.os>-php-<version>-<hash>`). Reuse `cache-key` verbatim in the seed job's `actions/cache/save@v5` step — that's the contract that keeps producer and consumer keys from drifting.
+
+The composite is read-only by design. It does not run `composer install` and does not save the cache; both are decisions the caller's seed job owns, because install policy (skip-on-cache-hit, always-install, `--prefer-dist`, etc.) and save policy (always, only on miss) vary too much to fold into a default.
+
+Scope: same as the root action — Linux x86_64, PHP 8.3/8.4/8.5. For monorepo / non-root composer setups, point `dependency-path` at the right files.
+
 ## Why
 
 Third-party GH Actions runners (Depot, Blacksmith, Namespace, BuildJet) get flagged as self-hosted, so `shivammathur/setup-php` falls back to a PPA install (~85s on Depot vs ~6s on GH-hosted). A pre-built static binary skips that.
