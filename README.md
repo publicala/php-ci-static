@@ -245,6 +245,8 @@ The composite action follows semver-style sliding tags:
 
 Breaking input changes will ship as `@v2`. See [CHANGELOG.md](CHANGELOG.md).
 
+Releases are cut automatically by `.github/workflows/release.yml`: bumping the top `## vX.Y.Z` header in `CHANGELOG.md` and merging to `main` creates the immutable `vX.Y.Z` tag, force-moves the sliding `vX` tag, and publishes a GitHub Release whose body is the matching CHANGELOG block. The workflow is idempotent — re-running on a commit whose top version is already tagged is a no-op — and a PR check fails if the top header drifts from the `## vX.Y.Z` shape.
+
 ## Build
 
 Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`, triggered by `workflow_dispatch`, a weekly cron, or any push to `main` that touches `.github/workflows/build.yml`. Each successful run overwrites the matching `latest-X.Y` release and moves the underlying git tag to the build commit.
