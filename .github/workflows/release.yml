@@ -96,6 +96,16 @@ jobs:
             echo "::error file=CHANGELOG.md::Composite action files changed but the top CHANGELOG header is still v$head_version. Add a new '## vX.Y.Z' block at the top of CHANGELOG.md (see the Versioning section at the bottom for the semver rules) so the release workflow can publish your change."
             exit 1
           fi
+
+          # Strict monotonic check: head must be strictly greater than base in
+          # semver order. Catches downgrades (`v1.5.2` -> `v1.5.1`) that would
+          # otherwise slip through `head != base`. `sort -V` does the right
+          # thing on plain `X.Y.Z`.
+          newest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
+          if [[ "$newest" != "$head_version" ]]; then
+            echo "::error file=CHANGELOG.md::Top CHANGELOG version went backwards: base is v$base_version, PR sets v$head_version. The release flow only moves forward — bump the version above v$base_version."
+            exit 1
+          fi
           echo "OK: bumped v$base_version -> v$head_version"
 
   release:
