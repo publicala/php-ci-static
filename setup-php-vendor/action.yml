@@ -39,11 +39,11 @@ inputs:
 
 outputs:
   cache-hit:
-    description: 'true' when the cache was an exact match for the key.
+    description: The string "true" when the cache was an exact match for the key.
     value: ${{ steps.restore.outputs.cache-hit }}
   cache-key:
     description: >
-      The resolved cache key. Reuse it verbatim in `actions/cache/save@v5`
+      The resolved cache key. Reuse it verbatim in actions/cache/save@v5
       from the seed job so producer and consumer keys cannot drift.
     value: ${{ steps.key.outputs.value }}
 
