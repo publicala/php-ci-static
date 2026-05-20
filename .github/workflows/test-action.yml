@@ -161,6 +161,33 @@ jobs:
           [[ "$got" == "/tmp/foo=bar.log" ]] \
             || { echo "::error::error_log: got '$got'"; exit 1; }
 
+  ini-values-preserves-literal-quote-chars:
+    name: ini-values preserves apostrophes inside values
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./
+        with:
+          php-version: '8.4'
+          # `'` appears inside an unquoted value — must not be treated as a
+          # quote delimiter. Same for a literal `"` further down.
+          ini-values: |
+            error_log=/tmp/o'reilly.log
+            sendmail_path=/usr/sbin/sendmail -t -i
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          got="$(php -r 'echo ini_get("error_log");')"
+          [[ "$got" == "/tmp/o'reilly.log" ]] \
+            || { echo "::error::error_log lost apostrophe: got '$got'"; exit 1; }
+
+          got="$(php -r 'echo ini_get("sendmail_path");')"
+          [[ "$got" == "/usr/sbin/sendmail -t -i" ]] \
+            || { echo "::error::sendmail_path: got '$got'"; exit 1; }
+
   ini-values-rejects-bad-input:
     name: ini-values rejects malformed input
     runs-on: depot-ubuntu-24.04
