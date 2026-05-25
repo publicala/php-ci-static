@@ -42,7 +42,7 @@ concurrency:
 jobs:
   validate:
     name: Validate changelog header
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -63,7 +63,7 @@ jobs:
   guard-changelog-bump:
     name: Guard CHANGELOG bump when action.yml changes
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -115,7 +115,7 @@ jobs:
     # the workflow from a feature branch would publish vX.Y.Z and move vX
     # from unmerged code. Codex flagged this — keep it.
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:

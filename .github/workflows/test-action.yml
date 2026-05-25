@@ -198,7 +198,6 @@ jobs:
 
       - name: Bad directive name fails validation
         id: bad
-        continue-on-error: true
         uses: ./
         with:
           php-version: '8.4'
@@ -335,7 +334,6 @@ jobs:
       - uses: actions/checkout@v6
 
       - id: bad
-        continue-on-error: true
         uses: ./setup-php-vendor
         with:
           php-version: '8.4'
@@ -360,7 +358,6 @@ jobs:
           echo '{"content-hash":"none"}' > composer.lock
 
       - id: bad
-        continue-on-error: true
         uses: ./setup-php-vendor
         with:
           php-version: '8.4'
