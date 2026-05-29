@@ -13,6 +13,16 @@ Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/c
 
 That's it. The action downloads the static PHP binary for the matching `latest-8.4` release, verifies the checksum, puts both `php` and `composer` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls just work.
 
+## Development
+
+```bash
+npm install
+npm test
+npm run hooks:install
+```
+
+`npm test` runs the local tooling harness used in CI: Prettier for repo tooling files, `github-actionlint` for workflow files, and ShellCheck for embedded Bash in workflows and composite actions.
+
 ## Inputs
 
 | Input | Required | Default | Accepted values |
