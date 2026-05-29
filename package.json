@@ -1,0 +1,19 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "format": "prettier --write \"package*.json\" \"lefthook.yml\"",
+    "format:staged": "prettier --write --ignore-unknown",
+    "hooks:install": "lefthook install",
+    "test": "npm run test:format && npm run test:shell && npm run test:actions",
+    "test:actions": "github-actionlint -ignore 'label .* is unknown' -shellcheck=node_modules/.bin/shellcheck .github/workflows/*.yml",
+    "test:format": "prettier --check \"package*.json\" \"lefthook.yml\"",
+    "test:shell": "bash scripts/shellcheck-action-runs.bash && shellcheck scripts/*.bash"
+  },
+  "devDependencies": {
+    "github-actionlint": "^1.7.12",
+    "lefthook": "^1.13.6",
+    "prettier": "^3.8.3",
+    "shellcheck": "^3.1.0"
+  }
+}
