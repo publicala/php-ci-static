@@ -25,11 +25,6 @@ on:
       - 'CHANGELOG.md'
       - '.github/workflows/release.yml'
   pull_request:
-    paths:
-      - 'CHANGELOG.md'
-      - 'action.yml'
-      - 'setup-php-vendor/action.yml'
-      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 permissions:
@@ -81,7 +76,9 @@ jobs:
             exit 0
           fi
           echo "PR modifies composite action files:"
-          printf '  - %s\n' $changed
+          while IFS= read -r file; do
+            printf '  - %s\n' "$file"
+          done <<< "$changed"
 
           head_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | sed 's/^## v//')
           # `git show base:CHANGELOG.md` reads the file as it stood on the PR base.

@@ -3,15 +3,7 @@ name: Test action
 on:
   push:
     branches: [main]
-    paths:
-      - 'action.yml'
-      - 'setup-php-vendor/action.yml'
-      - '.github/workflows/test-action.yml'
   pull_request:
-    paths:
-      - 'action.yml'
-      - 'setup-php-vendor/action.yml'
-      - '.github/workflows/test-action.yml'
   workflow_dispatch:
 
 permissions:
@@ -235,8 +227,6 @@ jobs:
           HIT: ${{ steps.setup.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          # Hash is deterministic across runs (same fixture bytes), so we can pin it.
-          expected_hash="$( { sha256sum composer.json composer.lock; } | sha256sum | cut -c1-40)"
           # GitHub's hashFiles uses SHA256 of concatenated SHA256s; we don't try to
           # reproduce it exactly — just assert the prefix and that the suffix is non-empty.
           [[ "$KEY" == composer-Linux-php-8.4-* ]] \
