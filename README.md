@@ -11,7 +11,7 @@ Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/c
     coverage: pcov           # optional, default: none
 ```
 
-That's it. The action downloads the static PHP binary for the matching `latest-8.4` release, verifies the checksum, puts both `php` and `composer` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls see it automatically.
+That's it. The action resolves the current `8.4` binary release, downloads it, verifies the checksum, puts both `php` and `composer` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls see it automatically.
 
 ## Development
 
@@ -177,11 +177,13 @@ The slow path triggers whenever a runner reports `RUNNER_ENVIRONMENT=self-hosted
 
 ## Available releases
 
-Sliding tags, refreshed on every successful build:
+Every build publishes one immutable release per PHP patch, tagged `php-<version>` (for example `php-8.4.21`). A mutable pointer on the `channels` branch records the newest release for each series, and the action reads it to resolve the right binary:
 
-- `latest-8.3` → PHP 8.3 series
-- `latest-8.4` → PHP 8.4 series
-- `latest-8.5` → PHP 8.5 series
+- `channels/8.3` points at the newest `php-8.3.*` release
+- `channels/8.4` points at the newest `php-8.4.*` release
+- `channels/8.5` points at the newest `php-8.5.*` release
+
+The organization enforces immutable releases, so binaries can no longer be overwritten in place. Publishing each patch as its own immutable release (and sliding a tiny text pointer instead of the assets) keeps "latest" working while every published binary stays tamper-proof and verifiable. The pre-immutability `latest-8.x` releases are frozen. The action falls back to them only if the pointer is unreachable.
 
 Each release publishes three assets plus a checksum file:
 
@@ -227,10 +229,11 @@ Three-tier strategy: static PHP for the common Laravel CI workload, [`lorisleiva
 
 ## Manual install (no GitHub Actions)
 
-For Forge, raw shell, or any non-Actions runner. Same recipe the action runs internally:
+For Forge, raw shell, or any non-Actions runner. Resolve the current release for your series from the `channels` pointer, then download and verify (the same recipe the action runs internally):
 
 ```bash
-BASE=https://github.com/publicala/php-ci-static/releases/download/latest-8.4
+SERIES=8.4
+BASE=$(curl -fsSL "https://raw.githubusercontent.com/publicala/php-ci-static/channels/$SERIES")
 curl -fsSL -O "$BASE/php-linux-x86_64"
 curl -fsSL -O "$BASE/SHA256SUMS"
 grep ' php-linux-x86_64$' SHA256SUMS | sha256sum -c -
@@ -238,6 +241,8 @@ chmod +x php-linux-x86_64
 sudo mv php-linux-x86_64 /usr/local/bin/php
 php -v
 ```
+
+To pin an exact patch, skip the pointer and set `BASE` to a specific release, e.g. `https://github.com/publicala/php-ci-static/releases/download/php-8.4.21`.
 
 Piping the matching line into `sha256sum -c` (rather than `sha256sum -c SHA256SUMS --ignore-missing`) guarantees the check actually ran. `--ignore-missing` would exit 0 even if nothing matched.
 
@@ -269,7 +274,7 @@ Releases are cut automatically by `.github/workflows/release.yml`: bumping the t
 
 ## Build
 
-Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`, triggered by `workflow_dispatch`, a weekly cron, or any push to `main` that touches `.github/workflows/build.yml`. Each successful run overwrites the matching `latest-X.Y` release and moves the underlying git tag to the build commit.
+Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`, triggered by `workflow_dispatch`, a weekly cron, or any push to `main` that touches `.github/workflows/build.yml`. Each successful run publishes an immutable `php-<version>` release (a no-op if that patch is already published) and repoints `channels/<series>` at it.
 
 ## Scope
 

@@ -110,7 +110,38 @@ runs:
         ROOT="$RUNNER_TEMP/php-ci-static"
         BIN="$ROOT/bin"
         CONFD="$ROOT/conf.d"
-        BASE="https://github.com/publicala/php-ci-static/releases/download/latest-${PHP_VERSION}"
+
+        # Resolve the current immutable release for this PHP series from the
+        # channel pointer. The organization enforces immutable releases, so
+        # binaries ship as one release per patch (php-X.Y.Z) and the pointer
+        # names the newest. Fall back to the frozen latest-X.Y release if the
+        # pointer cannot be reached, so a transient raw.githubusercontent
+        # outage still yields a working, checksum-verified binary.
+        POINTER="https://raw.githubusercontent.com/publicala/php-ci-static/channels/${PHP_VERSION}"
+        # tr strips a trailing CR or stray whitespace so a pointer hand-edited via
+        # the GitHub web UI (which writes CRLF) does not slip a \r into the URL.
+        BASE="$(curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$POINTER" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+        if [[ -z "$BASE" ]]; then
+          # The pointer was unreachable (a transient raw.githubusercontent outage,
+          # or a deleted/empty channels/<series> file). Fall back to the frozen
+          # pre-immutability release so the job still gets a checksum-verified
+          # binary, and warn that a persistent failure means a stale install.
+          echo "::warning::could not resolve channel pointer ${POINTER}. Falling back to the frozen latest-${PHP_VERSION} release, so the installed PHP may be an older patch. If this repeats, check that channels/${PHP_VERSION} exists and is reachable."
+          BASE="https://github.com/publicala/php-ci-static/releases/download/latest-${PHP_VERSION}"
+        fi
+        # Constrain BASE to this repo's release downloads for the requested
+        # series. A pointer that resolves anywhere else, or to a different PHP
+        # series (e.g. channels/8.4 pointing at php-8.3.x), is rejected rather
+        # than fetched. The installed binary is also asserted below.
+        dl="https://github.com/publicala/php-ci-static/releases/download"
+        case "$BASE" in
+          "$dl/php-${PHP_VERSION}."*) ;;
+          "$dl/latest-${PHP_VERSION}") ;;
+          *)
+            echo "::error::resolved release base does not match php-version ${PHP_VERSION}: ${BASE}"
+            exit 1
+            ;;
+        esac
 
         # Idempotent: clean before staging in case the action runs twice in one job.
         rm -rf "$ROOT"
@@ -236,6 +267,15 @@ runs:
         # re-export locally to make these diagnostics meaningful.
         export PATH="$BIN:$PATH"
         export PHP_INI_SCAN_DIR="$CONFD"
+
+        # Assert the installed binary is the requested series, regardless of how
+        # BASE resolved. Catches a mispointed channel or a wrong-series fallback
+        # before any consumer step runs against the wrong PHP.
+        installed="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+        if [[ "$installed" != "$PHP_VERSION" ]]; then
+          echo "::error::installed PHP ${installed} does not match requested php-version ${PHP_VERSION}"
+          exit 1
+        fi
 
         echo "::group::php -v"
         php -v

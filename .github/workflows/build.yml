@@ -137,21 +137,27 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-      - name: Publish sliding release
+      - name: Publish immutable release and update channel pointer
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: latest-${{ matrix.php_version }}
+          TAG: php-${{ steps.ver.outputs.exact }}
           EXACT: ${{ steps.ver.outputs.exact }}
           SERIES: ${{ matrix.php_version }}
           EXTENSIONS_LIST: ${{ env.SPC_STATIC_EXTENSIONS }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        # Release pattern is "create-or-edit + upload --clobber" so the
-        # sliding tag is never deleted between runs. Avoids the 404 window
-        # consumers would otherwise see while assets are being staged.
+        # The organization enforces immutable releases, so each PHP patch is
+        # published exactly once under php-<version> and is never edited or
+        # re-uploaded. A rebuild of an existing patch is a no-op on the release.
+        # The mutable channels/<series> pointer is repointed on every run, so
+        # the action always resolves the newest binary without overwriting any
+        # release. See the channels branch for the pointer format.
         run: |
           set -euo pipefail
+
+          BASE="$GITHUB_SERVER_URL/$REPO/releases/download/$TAG"
+
           cat > release-notes.md <<EOF
           Built by static-php-cli on $(date -u +%FT%TZ)
 
@@ -161,61 +167,177 @@ jobs:
           Runner: \`depot-ubuntu-24.04-16\`
           Workflow run: $RUN_URL
 
-          ## Usage
-
-          Default (no coverage, fastest). Verifies the binary against \`SHA256SUMS\`:
+          Immutable release. The composite action resolves the newest build per
+          series from the channels branch, so consumers do not pin this tag:
 
           ~~~yaml
-          - name: Install PHP
-            run: |
-              BASE=https://github.com/$REPO/releases/download/$TAG
-              curl -fsSL -O "\$BASE/php-linux-x86_64"
-              curl -fsSL -O "\$BASE/SHA256SUMS"
-              # Pipe the matching line into \`-c\` rather than using
-              # \`--ignore-missing\`, which exits 0 even when nothing matched.
-              grep ' php-linux-x86_64\$' SHA256SUMS | sha256sum -c -
-              chmod +x php-linux-x86_64
-              sudo mv php-linux-x86_64 /usr/local/bin/php
-              php -v
+          - uses: $REPO@v1
+            with:
+              php-version: '$SERIES'
           ~~~
 
-          Coverage with pcov (recommended, 10-100x faster than xdebug):
+          ## Manual install (no GitHub Actions)
 
-          ~~~yaml
-          - run: |
-              curl -fsSL -o pcov.so https://github.com/$REPO/releases/download/$TAG/pcov-linux-x86_64.so
-              php -d extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
+          Verifies the binary against \`SHA256SUMS\`:
+
+          ~~~bash
+          BASE=$BASE
+          curl -fsSL -O "\$BASE/php-linux-x86_64"
+          curl -fsSL -O "\$BASE/SHA256SUMS"
+          # Pipe the matching line into \`-c\` rather than using
+          # \`--ignore-missing\`, which exits 0 even when nothing matched.
+          grep ' php-linux-x86_64\$' SHA256SUMS | sha256sum -c -
+          chmod +x php-linux-x86_64
+          sudo mv php-linux-x86_64 /usr/local/bin/php
+          php -v
           ~~~
 
-          Coverage with xdebug (or step-debugging):
+          Coverage (pcov is 10-100x faster than xdebug):
 
-          ~~~yaml
-          - run: |
-              curl -fsSL -o xdebug.so https://github.com/$REPO/releases/download/$TAG/xdebug-linux-x86_64.so
-              php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
+          ~~~bash
+          curl -fsSL -o pcov.so "$BASE/pcov-linux-x86_64.so"
+          php -d extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
+
+          curl -fsSL -o xdebug.so "$BASE/xdebug-linux-x86_64.so"
+          php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
           ~~~
           EOF
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # The tag stays at the commit where the release was first
-            # created. Only the assets and notes slide. Consumers fetch
-            # assets by release name, so the tag's commit pointer is
-            # cosmetic, and tag protection on latest-* blocks moving it
-            # anyway. The release notes carry the real build provenance
-            # (exact version, run URL, date).
-            gh release edit "$TAG" \
-              --title "PHP $EXACT (static, linux x86_64)" \
-              --notes-file release-notes.md
+          ASSETS=(
+            dist/php-linux-x86_64
+            dist/xdebug-linux-x86_64.so
+            dist/pcov-linux-x86_64.so
+            dist/SHA256SUMS
+          )
+
+          # Decide whether this immutable release already exists. gh exits
+          # non-zero both when the release is absent and on a transient API
+          # error, so capture the output and only treat a real 404 as "not
+          # published". Mistaking a rate-limit or 5xx for "absent" would route
+          # into create over an existing immutable tag, which 422s.
+          need_create=true
+          view_err="$(mktemp)"
+          if view_json="$(gh release view "$TAG" --json isDraft,assets 2>"$view_err")"; then
+            if [[ "$(jq -r '.isDraft' <<< "$view_json")" == "true" ]]; then
+              # gh creates the release, uploads assets, then finalizes. An
+              # interrupted run (build concurrency cancels in-progress arms) can
+              # leave a draft whose asset URLs 404 for the public and whose tag
+              # is not yet locked. Delete it and republish cleanly rather than
+              # repointing the channel at an unreachable release.
+              echo "::warning::release $TAG exists as an unpublished draft (interrupted publish). Deleting and republishing."
+              gh release delete "$TAG" --yes
+            else
+              # Published and immutable. Confirm every asset is present before
+              # repointing, so a partial prior publish cannot strand the pointer
+              # on a broken release.
+              present="$(jq -r '.assets[].name' <<< "$view_json")"
+              for asset in php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so SHA256SUMS; do
+                grep -qx "$asset" <<< "$present" \
+                  || { echo "::error::existing release $TAG is missing asset $asset"; exit 1; }
+              done
+              need_create=false
+              echo "Release $TAG already exists with all assets (immutable). Skipping upload."
+
+              # Immutability forbids updating published assets, so a rebuild that
+              # produced different bytes for this same patch can never ship. Warn
+              # so the no-op is visible instead of silently discarding the build.
+              pubdir="$(mktemp -d)"
+              if gh release download "$TAG" --pattern SHA256SUMS --dir "$pubdir" --clobber 2>/dev/null \
+                 && ! diff -q "$pubdir/SHA256SUMS" dist/SHA256SUMS >/dev/null 2>&1; then
+                echo "::warning::rebuilt $TAG differs from the published immutable release. Immutability blocks updating its assets, so these bytes will not ship. Bump the PHP patch to release new binaries."
+              fi
+              rm -rf "$pubdir"
+            fi
+          elif grep -qiE 'release not found|HTTP 404|Not Found' "$view_err"; then
+            : # genuinely not published yet, fall through to create
           else
+            echo "::error::could not determine whether release $TAG exists:"
+            cat "$view_err"
+            rm -f "$view_err"
+            exit 1
+          fi
+          rm -f "$view_err"
+
+          if [[ "$need_create" == "true" ]]; then
+            # Immutable releases lock their assets at publish, so every asset must
+            # be attached in this one create call (a later upload is rejected).
             gh release create "$TAG" \
+              "${ASSETS[@]}" \
               --target "$GITHUB_SHA" \
               --title "PHP $EXACT (static, linux x86_64)" \
               --notes-file release-notes.md
           fi
 
-          gh release upload "$TAG" \
-            dist/php-linux-x86_64 \
-            dist/xdebug-linux-x86_64.so \
-            dist/pcov-linux-x86_64.so \
-            dist/SHA256SUMS \
-            --clobber
+          # Repoint the channel for this series at the release just published, but
+          # never regress it. A re-run or a cached older source can build an older
+          # patch than the channel already serves (the built version is whatever
+          # spc produced, not a function of the checked-out commit), so advance
+          # only. A non-php-* pointer (the latest-* seed) always advances.
+          #
+          # Matrix arms each write a different file (channels/8.3, 8.4, 8.5) but
+          # commit to the same channels ref, so a sibling arm can move the branch
+          # head between our read and our write (a 409). Retry only that conflict,
+          # and surface any other failure (auth, branch protection, 422) at once
+          # rather than burning retries on a misleading message. The one read
+          # yields the blob SHA and the current pointer, and tells a real 404
+          # (first write) apart from a transient error worth retrying, so a blip
+          # can never empty the pointer and skip the regression check.
+          ENCODED="$(printf '%s\n' "$BASE" | base64 | tr -d '\n')"
+          updated=false
+          for attempt in 1 2 3 4 5; do
+            read_err="$(mktemp)"
+            if obj="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" 2>"$read_err")"; then
+              CURRENT_SHA="$(jq -r '.sha // empty' <<< "$obj")"
+              # || true scopes to the local decode only (the network/auth failure
+              # is handled by the elif/else), so malformed content reads as empty.
+              current_base="$(jq -r '.content // empty' <<< "$obj" | base64 -d 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+            elif grep -qiE 'HTTP 404|Not Found' "$read_err"; then
+              CURRENT_SHA="" # file absent, this is the first write
+              current_base=""
+            else
+              echo "Could not read channels/$SERIES (attempt $attempt), retrying:"
+              cat "$read_err"
+              rm -f "$read_err"
+              sleep "$((attempt * 3))"
+              continue
+            fi
+            rm -f "$read_err"
+
+            # Advance only. If the channel already serves a newer patch, leave it.
+            case "$current_base" in
+              */php-*)
+                current_ver="${current_base##*/php-}"
+                newest="$(printf '%s\n%s\n' "$current_ver" "$EXACT" | sort -V | tail -n1)"
+                if [[ "$current_ver" != "$EXACT" && "$newest" == "$current_ver" ]]; then
+                  echo "::warning::channels/$SERIES already points at php-$current_ver, newer than this build's php-$EXACT. Leaving the pointer unchanged."
+                  echo "Pointer channels/$SERIES left at php-$current_ver"
+                  exit 0
+                fi
+                ;;
+            esac
+
+            put_args=(-f "message=chore(channels): point $SERIES at $TAG" -f "content=$ENCODED" -f branch=channels)
+            [[ -n "$CURRENT_SHA" ]] && put_args+=(-f "sha=$CURRENT_SHA")
+
+            put_err="$(mktemp)"
+            if gh api -X PUT "repos/$REPO/contents/$SERIES" "${put_args[@]}" >/dev/null 2>"$put_err"; then
+              rm -f "$put_err"
+              updated=true
+              break
+            fi
+            if grep -qiE 'HTTP 409|does not match|is at|conflict' "$put_err"; then
+              echo "channels/$SERIES write raced a concurrent arm (attempt $attempt). Retrying."
+              rm -f "$put_err"
+              sleep "$((attempt * 3))"
+            else
+              echo "::error::failed to update channels/$SERIES (not a retryable conflict):"
+              cat "$put_err"
+              rm -f "$put_err"
+              exit 1
+            fi
+          done
+          if [[ "$updated" != "true" ]]; then
+            echo "::error::failed to update channels/$SERIES after retries"
+            exit 1
+          fi
+          echo "Pointer channels/$SERIES -> $BASE"
