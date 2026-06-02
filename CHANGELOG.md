@@ -11,6 +11,10 @@
   binary, and falls back to the frozen `latest-8.x` release if the
   pointer is unreachable.
 
+  The channel only ever advances. A rebuild or re-run that produces an
+  older patch leaves the pointer unchanged, so `@v1` consumers are never
+  downgraded to an earlier PHP build.
+
   Backward-compatible. Consumers on `@v1` (root action or
   `setup-php-vendor`) need no changes, and the action's inputs are
   unchanged. Hand-rolled `latest-8.x` download URLs keep returning the

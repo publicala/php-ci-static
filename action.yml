@@ -118,9 +118,15 @@ runs:
         # pointer cannot be reached, so a transient raw.githubusercontent
         # outage still yields a working, checksum-verified binary.
         POINTER="https://raw.githubusercontent.com/publicala/php-ci-static/channels/${PHP_VERSION}"
-        BASE="$(curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$POINTER" 2>/dev/null | head -n1 || true)"
+        # tr strips a trailing CR or stray whitespace so a pointer hand-edited via
+        # the GitHub web UI (which writes CRLF) does not slip a \r into the URL.
+        BASE="$(curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$POINTER" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
         if [[ -z "$BASE" ]]; then
-          echo "::warning::could not resolve channel pointer ${POINTER}, falling back to latest-${PHP_VERSION}"
+          # The pointer was unreachable (a transient raw.githubusercontent outage,
+          # or a deleted/empty channels/<series> file). Fall back to the frozen
+          # pre-immutability release so the job still gets a checksum-verified
+          # binary, and warn that a persistent failure means a stale install.
+          echo "::warning::could not resolve channel pointer ${POINTER}. Falling back to the frozen latest-${PHP_VERSION} release, so the installed PHP may be an older patch. If this repeats, check that channels/${PHP_VERSION} exists and is reachable."
           BASE="https://github.com/publicala/php-ci-static/releases/download/latest-${PHP_VERSION}"
         fi
         # Constrain BASE to this repo's release downloads for the requested

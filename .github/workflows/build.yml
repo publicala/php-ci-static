@@ -210,22 +210,57 @@ jobs:
             dist/SHA256SUMS
           )
 
-          # Immutable releases lock their assets at publish time, so the assets
-          # must be attached in the same `gh release create` call (gh uploads
-          # them before finalizing immutability). A separate `gh release upload`
-          # afterward would be rejected and could strand an empty release.
-          # Published once per patch; a rebuild of the same version reuses it.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # Already published. Confirm it actually carries every asset before
-            # repointing the channel, so a prior partial publish cannot strand
-            # the pointer on an empty release.
-            present="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
-            for asset in php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so SHA256SUMS; do
-              grep -qx "$asset" <<< "$present" \
-                || { echo "::error::existing release $TAG is missing asset $asset"; exit 1; }
-            done
-            echo "Release $TAG already exists with all assets (immutable). Skipping upload."
+          # Decide whether this immutable release already exists. gh exits
+          # non-zero both when the release is absent and on a transient API
+          # error, so capture the output and only treat a real 404 as "not
+          # published". Mistaking a rate-limit or 5xx for "absent" would route
+          # into create over an existing immutable tag, which 422s.
+          need_create=true
+          view_err="$(mktemp)"
+          if view_json="$(gh release view "$TAG" --json isDraft,assets 2>"$view_err")"; then
+            if [[ "$(jq -r '.isDraft' <<< "$view_json")" == "true" ]]; then
+              # gh creates the release, uploads assets, then finalizes. An
+              # interrupted run (build concurrency cancels in-progress arms) can
+              # leave a draft whose asset URLs 404 for the public and whose tag
+              # is not yet locked. Delete it and republish cleanly rather than
+              # repointing the channel at an unreachable release.
+              echo "::warning::release $TAG exists as an unpublished draft (interrupted publish). Deleting and republishing."
+              gh release delete "$TAG" --yes
+            else
+              # Published and immutable. Confirm every asset is present before
+              # repointing, so a partial prior publish cannot strand the pointer
+              # on a broken release.
+              present="$(jq -r '.assets[].name' <<< "$view_json")"
+              for asset in php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so SHA256SUMS; do
+                grep -qx "$asset" <<< "$present" \
+                  || { echo "::error::existing release $TAG is missing asset $asset"; exit 1; }
+              done
+              need_create=false
+              echo "Release $TAG already exists with all assets (immutable). Skipping upload."
+
+              # Immutability forbids updating published assets, so a rebuild that
+              # produced different bytes for this same patch can never ship. Warn
+              # so the no-op is visible instead of silently discarding the build.
+              pubdir="$(mktemp -d)"
+              if gh release download "$TAG" --pattern SHA256SUMS --dir "$pubdir" --clobber 2>/dev/null \
+                 && ! diff -q "$pubdir/SHA256SUMS" dist/SHA256SUMS >/dev/null 2>&1; then
+                echo "::warning::rebuilt $TAG differs from the published immutable release. Immutability blocks updating its assets, so these bytes will not ship. Bump the PHP patch to release new binaries."
+              fi
+              rm -rf "$pubdir"
+            fi
+          elif grep -qiE 'release not found|HTTP 404|Not Found' "$view_err"; then
+            : # genuinely not published yet, fall through to create
           else
+            echo "::error::could not determine whether release $TAG exists:"
+            cat "$view_err"
+            rm -f "$view_err"
+            exit 1
+          fi
+          rm -f "$view_err"
+
+          if [[ "$need_create" == "true" ]]; then
+            # Immutable releases lock their assets at publish, so every asset must
+            # be attached in this one create call (a later upload is rejected).
             gh release create "$TAG" \
               "${ASSETS[@]}" \
               --target "$GITHUB_SHA" \
@@ -233,28 +268,65 @@ jobs:
               --notes-file release-notes.md
           fi
 
+          # Never regress the channel. A re-run or a cached older source can build
+          # an older patch than the channel already serves (the built version is
+          # whatever spc produced, not a function of the checked-out commit), so
+          # advance only. A non-php-* pointer (the latest-* seed) always advances.
+          current_base="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+          case "$current_base" in
+            */php-*)
+              current_ver="${current_base##*/php-}"
+              newest="$(printf '%s\n%s\n' "$current_ver" "$EXACT" | sort -V | tail -n1)"
+              if [[ "$current_ver" != "$EXACT" && "$newest" == "$current_ver" ]]; then
+                echo "::warning::channels/$SERIES already points at php-$current_ver, newer than this build's php-$EXACT. Leaving the pointer unchanged."
+                echo "Pointer channels/$SERIES left at php-$current_ver"
+                exit 0
+              fi
+              ;;
+          esac
+
           # Repoint the channel for this series at the release just published.
-          # Each arm writes its own file (channels/8.3, 8.4, 8.5), but all three
-          # commit to the same channels ref, so concurrent arms can collide on
-          # the branch head. Re-read the file SHA and retry on conflict. The
-          # SHA is absent on the very first write, where -f sha is omitted.
+          # Matrix arms each write a different file (channels/8.3, 8.4, 8.5) but
+          # commit to the same channels ref, so a sibling arm can move the branch
+          # head between our SHA read and our write (a 409). Retry only that
+          # conflict, and surface any other failure (auth, branch protection,
+          # 422) immediately rather than burning retries on a misleading message.
           ENCODED="$(printf '%s\n' "$BASE" | base64 | tr -d '\n')"
           updated=false
           for attempt in 1 2 3 4 5; do
-            CURRENT_SHA="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" --jq .sha 2>/dev/null || true)"
-            if [[ -n "$CURRENT_SHA" ]]; then
-              gh api -X PUT "repos/$REPO/contents/$SERIES" \
-                -f message="chore(channels): point $SERIES at $TAG" \
-                -f content="$ENCODED" -f branch=channels -f sha="$CURRENT_SHA" >/dev/null 2>&1 \
-                && { updated=true; break; }
+            read_err="$(mktemp)"
+            if obj="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" 2>"$read_err")"; then
+              CURRENT_SHA="$(jq -r '.sha // empty' <<< "$obj")"
+            elif grep -qiE 'HTTP 404|Not Found' "$read_err"; then
+              CURRENT_SHA="" # file absent, this is the first write
             else
-              gh api -X PUT "repos/$REPO/contents/$SERIES" \
-                -f message="chore(channels): point $SERIES at $TAG" \
-                -f content="$ENCODED" -f branch=channels >/dev/null 2>&1 \
-                && { updated=true; break; }
+              echo "Could not read channels/$SERIES SHA (attempt $attempt), retrying:"
+              cat "$read_err"
+              rm -f "$read_err"
+              sleep "$((attempt * 3))"
+              continue
             fi
-            echo "Pointer update attempt $attempt failed (likely a concurrent channels write). Retrying."
-            sleep "$((attempt * 3))"
+            rm -f "$read_err"
+
+            put_args=(-f "message=chore(channels): point $SERIES at $TAG" -f "content=$ENCODED" -f branch=channels)
+            [[ -n "$CURRENT_SHA" ]] && put_args+=(-f "sha=$CURRENT_SHA")
+
+            put_err="$(mktemp)"
+            if gh api -X PUT "repos/$REPO/contents/$SERIES" "${put_args[@]}" >/dev/null 2>"$put_err"; then
+              rm -f "$put_err"
+              updated=true
+              break
+            fi
+            if grep -qiE 'HTTP 409|HTTP 422|does not match|is at|conflict' "$put_err"; then
+              echo "channels/$SERIES write raced a concurrent arm (attempt $attempt). Retrying."
+              rm -f "$put_err"
+              sleep "$((attempt * 3))"
+            else
+              echo "::error::failed to update channels/$SERIES (not a retryable conflict):"
+              cat "$put_err"
+              rm -f "$put_err"
+              exit 1
+            fi
           done
           if [[ "$updated" != "true" ]]; then
             echo "::error::failed to update channels/$SERIES after retries"
