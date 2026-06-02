@@ -24,7 +24,7 @@ concurrency:
 jobs:
   build:
     name: PHP ${{ matrix.php_version }}
-    # PHP compilation is CPU-bound; -16 keeps each matrix arm under ~10 min
+    # PHP compilation is CPU-bound. -16 keeps each matrix arm under ~10 min
     # versus ~30 on base. Per pla-stack sizing policy.
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 60
@@ -34,7 +34,7 @@ jobs:
         php_version: ['8.3', '8.4', '8.5']
     env:
       # Link against glibc instead of musl. musl static binaries
-      # cannot dlopen shared extensions (it has no dlopen impl);
+      # cannot dlopen shared extensions (it has no dlopen impl).
       # glibc-linked binaries can. Every Ubuntu / Debian / Depot
       # runner ships glibc, so the binary stays portable across
       # any standard CI runner.
@@ -105,7 +105,7 @@ jobs:
           ./buildroot/bin/php -r 'exit(extension_loaded("imagick") && class_exists("Imagick") ? 0 : 1);'
 
       - name: Verify shared extensions load
-        # xdebug is a Zend extension; pcov is a regular PHP extension.
+        # xdebug is a Zend extension. pcov is a regular PHP extension.
         # Each --ri call exits non-zero if the .so does not register, so
         # this step fails loudly if either module is broken.
         run: |

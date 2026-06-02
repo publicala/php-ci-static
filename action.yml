@@ -16,7 +16,7 @@ inputs:
     required: false
     default: 'none'
   ini-values:
-    description: 'PHP ini directives, comma- or newline-separated. e.g. `memory_limit=512M, opcache.enable_cli=1`. Values may contain commas in two ways: wrap the value in single or double quotes (`disable_functions="exec,passthru"`) — matches `shivammathur/setup-php` — or rely on the smart-split fallback, which only treats commas that precede a `<directive>=` as separators (so unquoted `disable_functions=exec,passthru` also works). Composes with `coverage:` — both load from the same scan dir.'
+    description: 'PHP ini directives, comma- or newline-separated. e.g. `memory_limit=512M, opcache.enable_cli=1`. Values may contain commas in two ways. Wrap the value in single or double quotes (`disable_functions="exec,passthru"`), matching `shivammathur/setup-php`, or rely on the smart-split fallback, which only treats commas that precede a `<directive>=` as separators (so unquoted `disable_functions=exec,passthru` also works). Composes with `coverage:` (both load from the same scan dir).'
     required: false
     default: ''
 
@@ -54,14 +54,14 @@ runs:
           #   1. awk treats `'` / `"` as quote delimiters ONLY when they sit at
           #      "value-start" position (right after `=`, optionally past
           #      whitespace). Quotes appearing later in a value are kept
-          #      literal — so `error_log=/tmp/o'reilly.log` stays intact.
+          #      literal, so `error_log=/tmp/o'reilly.log` stays intact.
           #      Inside a quoted value, commas are replaced with \001 and
           #      the surrounding quote chars are stripped.
           #   2. sed splits on commas that precede a `<directive>=`, so the
           #      unquoted form (`disable_functions=exec,passthru`) also stays
           #      one entry. Newlines are separators too (YAML multiline).
           # The \001 sentinel is restored to a literal comma when writing the
-          # ini file in the install step; here we just check shape.
+          # ini file in the install step. Here we only check shape.
           printf '%s\n' "$INI_VALUES" \
             | awk '
               BEGIN { sq = sprintf("%c", 39); dq = sprintf("%c", 34); s = sprintf("%c", 1) }
@@ -120,7 +120,7 @@ runs:
         # `ini-values` (custom.ini) and `coverage` (coverage.ini) win. The
         # static binary's compiled-in defaults match the upstream php.ini-*
         # templates, where memory_limit=128M is intended for shared-hosting
-        # web SAPIs — Ubuntu's php-cli ships memory_limit=-1, and CI workloads
+        # web SAPIs. Ubuntu's php-cli ships memory_limit=-1, and CI workloads
         # (PHPCS, PHPStan, PHPUnit on Laravel-sized codebases) routinely
         # exceed 128M. Without this, PHPCS OOMs mid-run with no visible
         # output when wrappers like duster capture stdout via ob_start, and
