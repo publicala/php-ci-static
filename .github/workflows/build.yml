@@ -203,36 +203,61 @@ jobs:
           ~~~
           EOF
 
-          # Immutable: create and upload once per patch, never --clobber. A
-          # rebuild of the same PHP version finds the release already present
-          # and skips straight to refreshing the pointer.
+          ASSETS=(
+            dist/php-linux-x86_64
+            dist/xdebug-linux-x86_64.so
+            dist/pcov-linux-x86_64.so
+            dist/SHA256SUMS
+          )
+
+          # Immutable releases lock their assets at publish time, so the assets
+          # must be attached in the same `gh release create` call (gh uploads
+          # them before finalizing immutability). A separate `gh release upload`
+          # afterward would be rejected and could strand an empty release.
+          # Published once per patch; a rebuild of the same version reuses it.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists (immutable). Skipping create and upload."
+            # Already published. Confirm it actually carries every asset before
+            # repointing the channel, so a prior partial publish cannot strand
+            # the pointer on an empty release.
+            present="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            for asset in php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so SHA256SUMS; do
+              grep -qx "$asset" <<< "$present" \
+                || { echo "::error::existing release $TAG is missing asset $asset"; exit 1; }
+            done
+            echo "Release $TAG already exists with all assets (immutable). Skipping upload."
           else
             gh release create "$TAG" \
+              "${ASSETS[@]}" \
               --target "$GITHUB_SHA" \
               --title "PHP $EXACT (static, linux x86_64)" \
               --notes-file release-notes.md
-            gh release upload "$TAG" \
-              dist/php-linux-x86_64 \
-              dist/xdebug-linux-x86_64.so \
-              dist/pcov-linux-x86_64.so \
-              dist/SHA256SUMS
           fi
 
           # Repoint the channel for this series at the release just published.
-          # One file per series, so the three matrix arms write different paths
-          # and never race. The Contents API needs the current blob SHA to
-          # update an existing file, so read it first (absent on the first run).
+          # Each arm writes its own file (channels/8.3, 8.4, 8.5), but all three
+          # commit to the same channels ref, so concurrent arms can collide on
+          # the branch head. Re-read the file SHA and retry on conflict. The
+          # SHA is absent on the very first write, where -f sha is omitted.
           ENCODED="$(printf '%s\n' "$BASE" | base64 | tr -d '\n')"
-          CURRENT_SHA="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" --jq .sha 2>/dev/null || true)"
-          if [[ -n "$CURRENT_SHA" ]]; then
-            gh api -X PUT "repos/$REPO/contents/$SERIES" \
-              -f message="chore(channels): point $SERIES at $TAG" \
-              -f content="$ENCODED" -f branch=channels -f sha="$CURRENT_SHA" >/dev/null
-          else
-            gh api -X PUT "repos/$REPO/contents/$SERIES" \
-              -f message="chore(channels): point $SERIES at $TAG" \
-              -f content="$ENCODED" -f branch=channels >/dev/null
+          updated=false
+          for attempt in 1 2 3 4 5; do
+            CURRENT_SHA="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" --jq .sha 2>/dev/null || true)"
+            if [[ -n "$CURRENT_SHA" ]]; then
+              gh api -X PUT "repos/$REPO/contents/$SERIES" \
+                -f message="chore(channels): point $SERIES at $TAG" \
+                -f content="$ENCODED" -f branch=channels -f sha="$CURRENT_SHA" >/dev/null 2>&1 \
+                && { updated=true; break; }
+            else
+              gh api -X PUT "repos/$REPO/contents/$SERIES" \
+                -f message="chore(channels): point $SERIES at $TAG" \
+                -f content="$ENCODED" -f branch=channels >/dev/null 2>&1 \
+                && { updated=true; break; }
+            fi
+            echo "Pointer update attempt $attempt failed (likely a concurrent channels write). Retrying."
+            sleep "$((attempt * 3))"
+          done
+          if [[ "$updated" != "true" ]]; then
+            echo "::error::failed to update channels/$SERIES after retries"
+            exit 1
           fi
           echo "Pointer channels/$SERIES -> $BASE"

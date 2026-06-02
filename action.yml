@@ -123,12 +123,19 @@ runs:
           echo "::warning::could not resolve channel pointer ${POINTER}, falling back to latest-${PHP_VERSION}"
           BASE="https://github.com/publicala/php-ci-static/releases/download/latest-${PHP_VERSION}"
         fi
-        # Constrain BASE to this repo's release downloads. A pointer that
-        # resolves anywhere else is rejected rather than fetched.
-        if [[ "$BASE" != https://github.com/publicala/php-ci-static/releases/download/* ]]; then
-          echo "::error::resolved release base is not a publicala/php-ci-static release URL: ${BASE}"
-          exit 1
-        fi
+        # Constrain BASE to this repo's release downloads for the requested
+        # series. A pointer that resolves anywhere else, or to a different PHP
+        # series (e.g. channels/8.4 pointing at php-8.3.x), is rejected rather
+        # than fetched. The installed binary is also asserted below.
+        dl="https://github.com/publicala/php-ci-static/releases/download"
+        case "$BASE" in
+          "$dl/php-${PHP_VERSION}."*) ;;
+          "$dl/latest-${PHP_VERSION}") ;;
+          *)
+            echo "::error::resolved release base does not match php-version ${PHP_VERSION}: ${BASE}"
+            exit 1
+            ;;
+        esac
 
         # Idempotent: clean before staging in case the action runs twice in one job.
         rm -rf "$ROOT"
@@ -254,6 +261,15 @@ runs:
         # re-export locally to make these diagnostics meaningful.
         export PATH="$BIN:$PATH"
         export PHP_INI_SCAN_DIR="$CONFD"
+
+        # Assert the installed binary is the requested series, regardless of how
+        # BASE resolved. Catches a mispointed channel or a wrong-series fallback
+        # before any consumer step runs against the wrong PHP.
+        installed="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+        if [[ "$installed" != "$PHP_VERSION" ]]; then
+          echo "::error::installed PHP ${installed} does not match requested php-version ${PHP_VERSION}"
+          exit 1
+        fi
 
         echo "::group::php -v"
         php -v
