@@ -110,7 +110,25 @@ runs:
         ROOT="$RUNNER_TEMP/php-ci-static"
         BIN="$ROOT/bin"
         CONFD="$ROOT/conf.d"
-        BASE="https://github.com/publicala/php-ci-static/releases/download/latest-${PHP_VERSION}"
+
+        # Resolve the current immutable release for this PHP series from the
+        # channel pointer. The organization enforces immutable releases, so
+        # binaries ship as one release per patch (php-X.Y.Z) and the pointer
+        # names the newest. Fall back to the frozen latest-X.Y release if the
+        # pointer cannot be reached, so a transient raw.githubusercontent
+        # outage still yields a working, checksum-verified binary.
+        POINTER="https://raw.githubusercontent.com/publicala/php-ci-static/channels/${PHP_VERSION}"
+        BASE="$(curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$POINTER" 2>/dev/null | head -n1 || true)"
+        if [[ -z "$BASE" ]]; then
+          echo "::warning::could not resolve channel pointer ${POINTER}, falling back to latest-${PHP_VERSION}"
+          BASE="https://github.com/publicala/php-ci-static/releases/download/latest-${PHP_VERSION}"
+        fi
+        # Constrain BASE to this repo's release downloads. A pointer that
+        # resolves anywhere else is rejected rather than fetched.
+        if [[ "$BASE" != https://github.com/publicala/php-ci-static/releases/download/* ]]; then
+          echo "::error::resolved release base is not a publicala/php-ci-static release URL: ${BASE}"
+          exit 1
+        fi
 
         # Idempotent: clean before staging in case the action runs twice in one job.
         rm -rf "$ROOT"

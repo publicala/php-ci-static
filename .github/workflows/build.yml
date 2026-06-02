@@ -137,21 +137,27 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-      - name: Publish sliding release
+      - name: Publish immutable release and update channel pointer
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: latest-${{ matrix.php_version }}
+          TAG: php-${{ steps.ver.outputs.exact }}
           EXACT: ${{ steps.ver.outputs.exact }}
           SERIES: ${{ matrix.php_version }}
           EXTENSIONS_LIST: ${{ env.SPC_STATIC_EXTENSIONS }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        # Release pattern is "create-or-edit + upload --clobber" so the
-        # sliding tag is never deleted between runs. Avoids the 404 window
-        # consumers would otherwise see while assets are being staged.
+        # The organization enforces immutable releases, so each PHP patch is
+        # published exactly once under php-<version> and is never edited or
+        # re-uploaded. A rebuild of an existing patch is a no-op on the release.
+        # The mutable channels/<series> pointer is repointed on every run, so
+        # the action always resolves the newest binary without overwriting any
+        # release. See the channels branch for the pointer format.
         run: |
           set -euo pipefail
+
+          BASE="$GITHUB_SERVER_URL/$REPO/releases/download/$TAG"
+
           cat > release-notes.md <<EOF
           Built by static-php-cli on $(date -u +%FT%TZ)
 
@@ -161,61 +167,72 @@ jobs:
           Runner: \`depot-ubuntu-24.04-16\`
           Workflow run: $RUN_URL
 
-          ## Usage
-
-          Default (no coverage, fastest). Verifies the binary against \`SHA256SUMS\`:
+          Immutable release. The composite action resolves the newest build per
+          series from the channels branch, so consumers do not pin this tag:
 
           ~~~yaml
-          - name: Install PHP
-            run: |
-              BASE=https://github.com/$REPO/releases/download/$TAG
-              curl -fsSL -O "\$BASE/php-linux-x86_64"
-              curl -fsSL -O "\$BASE/SHA256SUMS"
-              # Pipe the matching line into \`-c\` rather than using
-              # \`--ignore-missing\`, which exits 0 even when nothing matched.
-              grep ' php-linux-x86_64\$' SHA256SUMS | sha256sum -c -
-              chmod +x php-linux-x86_64
-              sudo mv php-linux-x86_64 /usr/local/bin/php
-              php -v
+          - uses: $REPO@v1
+            with:
+              php-version: '$SERIES'
           ~~~
 
-          Coverage with pcov (recommended, 10-100x faster than xdebug):
+          ## Manual install (no GitHub Actions)
 
-          ~~~yaml
-          - run: |
-              curl -fsSL -o pcov.so https://github.com/$REPO/releases/download/$TAG/pcov-linux-x86_64.so
-              php -d extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
+          Verifies the binary against \`SHA256SUMS\`:
+
+          ~~~bash
+          BASE=$BASE
+          curl -fsSL -O "\$BASE/php-linux-x86_64"
+          curl -fsSL -O "\$BASE/SHA256SUMS"
+          # Pipe the matching line into \`-c\` rather than using
+          # \`--ignore-missing\`, which exits 0 even when nothing matched.
+          grep ' php-linux-x86_64\$' SHA256SUMS | sha256sum -c -
+          chmod +x php-linux-x86_64
+          sudo mv php-linux-x86_64 /usr/local/bin/php
+          php -v
           ~~~
 
-          Coverage with xdebug (or step-debugging):
+          Coverage (pcov is 10-100x faster than xdebug):
 
-          ~~~yaml
-          - run: |
-              curl -fsSL -o xdebug.so https://github.com/$REPO/releases/download/$TAG/xdebug-linux-x86_64.so
-              php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
+          ~~~bash
+          curl -fsSL -o pcov.so "$BASE/pcov-linux-x86_64.so"
+          php -d extension=\$PWD/pcov.so -d pcov.enabled=1 vendor/bin/pest --coverage
+
+          curl -fsSL -o xdebug.so "$BASE/xdebug-linux-x86_64.so"
+          php -d zend_extension=\$PWD/xdebug.so -d xdebug.mode=coverage vendor/bin/pest --coverage
           ~~~
           EOF
 
+          # Immutable: create and upload once per patch, never --clobber. A
+          # rebuild of the same PHP version finds the release already present
+          # and skips straight to refreshing the pointer.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            # The tag stays at the commit where the release was first
-            # created. Only the assets and notes slide. Consumers fetch
-            # assets by release name, so the tag's commit pointer is
-            # cosmetic, and tag protection on latest-* blocks moving it
-            # anyway. The release notes carry the real build provenance
-            # (exact version, run URL, date).
-            gh release edit "$TAG" \
-              --title "PHP $EXACT (static, linux x86_64)" \
-              --notes-file release-notes.md
+            echo "Release $TAG already exists (immutable). Skipping create and upload."
           else
             gh release create "$TAG" \
               --target "$GITHUB_SHA" \
               --title "PHP $EXACT (static, linux x86_64)" \
               --notes-file release-notes.md
+            gh release upload "$TAG" \
+              dist/php-linux-x86_64 \
+              dist/xdebug-linux-x86_64.so \
+              dist/pcov-linux-x86_64.so \
+              dist/SHA256SUMS
           fi
 
-          gh release upload "$TAG" \
-            dist/php-linux-x86_64 \
-            dist/xdebug-linux-x86_64.so \
-            dist/pcov-linux-x86_64.so \
-            dist/SHA256SUMS \
-            --clobber
+          # Repoint the channel for this series at the release just published.
+          # One file per series, so the three matrix arms write different paths
+          # and never race. The Contents API needs the current blob SHA to
+          # update an existing file, so read it first (absent on the first run).
+          ENCODED="$(printf '%s\n' "$BASE" | base64 | tr -d '\n')"
+          CURRENT_SHA="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" --jq .sha 2>/dev/null || true)"
+          if [[ -n "$CURRENT_SHA" ]]; then
+            gh api -X PUT "repos/$REPO/contents/$SERIES" \
+              -f message="chore(channels): point $SERIES at $TAG" \
+              -f content="$ENCODED" -f branch=channels -f sha="$CURRENT_SHA" >/dev/null
+          else
+            gh api -X PUT "repos/$REPO/contents/$SERIES" \
+              -f message="chore(channels): point $SERIES at $TAG" \
+              -f content="$ENCODED" -f branch=channels >/dev/null
+          fi
+          echo "Pointer channels/$SERIES -> $BASE"

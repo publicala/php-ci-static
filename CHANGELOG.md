@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.6.0
+
+- Resolve binaries through a channel pointer instead of the sliding
+  `latest-8.x` releases. The organization now enforces immutable GitHub
+  Releases, so the old model (overwrite the `latest-8.x` assets on every
+  build) no longer works. Builds now publish one immutable release per
+  PHP patch (`php-8.4.21`) and update a mutable per-series pointer on the
+  `channels` branch. The action reads the pointer to find the current
+  binary, and falls back to the frozen `latest-8.x` release if the
+  pointer is unreachable.
+
+  Backward-compatible. Consumers on `@v1` (root action or
+  `setup-php-vendor`) need no changes, and the action's inputs are
+  unchanged. Hand-rolled `latest-8.x` download URLs keep returning the
+  last assets published before immutability. Switch them to the pointer
+  (see the README "Manual install" section) to get fresh binaries.
+
 ## v1.5.2
 
 - Style pass across the repo docs and comments. Straighten
