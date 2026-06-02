@@ -304,9 +304,12 @@ jobs:
             rm -f "$read_err"
 
             # Advance only. If the channel already serves a newer patch, leave it.
-            case "$current_base" in
-              */php-*)
-                current_ver="${current_base##*/php-}"
+            # Match on the final path segment (the release tag) so the repo name
+            # "php-ci-static" earlier in the URL cannot pose as a php-<version> tag.
+            current_tag="${current_base##*/}"
+            case "$current_tag" in
+              php-*)
+                current_ver="${current_tag#php-}"
                 newest="$(printf '%s\n%s\n' "$current_ver" "$EXACT" | sort -V | tail -n1)"
                 if [[ "$current_ver" != "$EXACT" && "$newest" == "$current_ver" ]]; then
                   echo "::warning::channels/$SERIES already points at php-$current_ver, newer than this build's php-$EXACT. Leaving the pointer unchanged."
