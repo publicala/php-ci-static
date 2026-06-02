@@ -179,8 +179,8 @@ jobs:
       - uses: ./
         with:
           php-version: '8.4'
-          # `'` appears inside an unquoted value — must not be treated as a
-          # quote delimiter. Same for a literal `"` further down.
+          # `'` appears inside an unquoted value. It must not be treated
+          # as a quote delimiter. Same for a literal `"` further down.
           ini-values: |
             error_log=/tmp/o'reilly.log
             sendmail_path=/usr/sbin/sendmail -t -i
@@ -205,7 +205,7 @@ jobs:
 
       - name: Bad directive name fails validation
         id: bad
-        # pla-stack:allow-continue-on-error negative test — this step is meant to fail; the next step asserts steps.bad.outcome == failure
+        # pla-stack:allow-continue-on-error negative test. This step is meant to fail. The next step asserts steps.bad.outcome == failure
         continue-on-error: true
         uses: ./
         with:
@@ -229,7 +229,7 @@ jobs:
           echo '{"name":"pub/fixture"}' > composer.json
           echo '{"content-hash":"fixture"}' > composer.lock
 
-      # Cache miss is fine here; we're asserting the *key shape*, not restore behavior.
+      # Cache miss is fine here. We're asserting the *key shape*, not restore behavior.
       - id: setup
         uses: ./setup-php-vendor
         with:
@@ -242,8 +242,8 @@ jobs:
           HIT: ${{ steps.setup.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          # GitHub's hashFiles uses SHA256 of concatenated SHA256s; we don't try to
-          # reproduce it exactly — just assert the prefix and that the suffix is non-empty.
+          # GitHub's hashFiles uses SHA256 of concatenated SHA256s. We don't try to
+          # reproduce it exactly. We assert the prefix and that the suffix is non-empty.
           [[ "$KEY" == composer-Linux-php-8.4-* ]] \
             || { echo "::error::unexpected key prefix: $KEY"; exit 1; }
           [[ "${KEY#composer-Linux-php-8.4-}" =~ ^[0-9a-f]{40,}$ ]] \
@@ -341,7 +341,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - id: bad
-        # pla-stack:allow-continue-on-error negative test — this step is meant to fail; the next step asserts steps.bad.outcome == failure
+        # pla-stack:allow-continue-on-error negative test. This step is meant to fail. The next step asserts steps.bad.outcome == failure
         continue-on-error: true
         uses: ./setup-php-vendor
         with:
@@ -367,7 +367,7 @@ jobs:
           echo '{"content-hash":"none"}' > composer.lock
 
       - id: bad
-        # pla-stack:allow-continue-on-error negative test — this step is meant to fail; the next step asserts steps.bad.outcome == failure
+        # pla-stack:allow-continue-on-error negative test. This step is meant to fail. The next step asserts steps.bad.outcome == failure
         continue-on-error: true
         uses: ./setup-php-vendor
         with:
