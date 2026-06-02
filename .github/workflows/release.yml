@@ -217,18 +217,22 @@ jobs:
       - name: Create immutable tag
         if: steps.tag.outputs.state == 'absent'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
           RELEASE_SHA: ${{ steps.intro.outputs.sha }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Annotated tag created locally at the introduction commit, then pushed.
-          # `git tag -a <name> <sha>` anchors the tag to that specific commit
-          # rather than HEAD, so dispatches with HEAD past the release commit
-          # still tag the correct commit.
-          git tag -a "v$VERSION" -m "v$VERSION" "$RELEASE_SHA"
-          git push origin "v$VERSION"
+          # Create the tag through the API, not `git push`. A release commit can
+          # touch .github/workflows/*, and the default GITHUB_TOKEN (a GitHub App)
+          # is refused when a pushed ref carries workflow changes. The REST API
+          # anchors the annotated tag to the introduction commit without that
+          # restriction, so a dispatch with HEAD past the release commit still
+          # tags the correct commit.
+          tag_sha="$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/tags" \
+            -f tag="v$VERSION" -f message="v$VERSION" \
+            -f object="$RELEASE_SHA" -f type=commit --jq .sha)"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/v$VERSION" -f sha="$tag_sha" >/dev/null
           echo "Tagged v$VERSION at $RELEASE_SHA"
 
       - name: Move sliding tag

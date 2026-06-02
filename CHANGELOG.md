@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.6.0
+## v1.6.1
 
 - Resolve binaries through a channel pointer instead of the sliding
   `latest-8.x` releases. The organization now enforces immutable GitHub
