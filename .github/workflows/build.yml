@@ -268,45 +268,53 @@ jobs:
               --notes-file release-notes.md
           fi
 
-          # Never regress the channel. A re-run or a cached older source can build
-          # an older patch than the channel already serves (the built version is
-          # whatever spc produced, not a function of the checked-out commit), so
-          # advance only. A non-php-* pointer (the latest-* seed) always advances.
-          current_base="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
-          case "$current_base" in
-            */php-*)
-              current_ver="${current_base##*/php-}"
-              newest="$(printf '%s\n%s\n' "$current_ver" "$EXACT" | sort -V | tail -n1)"
-              if [[ "$current_ver" != "$EXACT" && "$newest" == "$current_ver" ]]; then
-                echo "::warning::channels/$SERIES already points at php-$current_ver, newer than this build's php-$EXACT. Leaving the pointer unchanged."
-                echo "Pointer channels/$SERIES left at php-$current_ver"
-                exit 0
-              fi
-              ;;
-          esac
-
-          # Repoint the channel for this series at the release just published.
+          # Repoint the channel for this series at the release just published, but
+          # never regress it. A re-run or a cached older source can build an older
+          # patch than the channel already serves (the built version is whatever
+          # spc produced, not a function of the checked-out commit), so advance
+          # only. A non-php-* pointer (the latest-* seed) always advances.
+          #
           # Matrix arms each write a different file (channels/8.3, 8.4, 8.5) but
           # commit to the same channels ref, so a sibling arm can move the branch
-          # head between our SHA read and our write (a 409). Retry only that
-          # conflict, and surface any other failure (auth, branch protection,
-          # 422) immediately rather than burning retries on a misleading message.
+          # head between our read and our write (a 409). Retry only that conflict,
+          # and surface any other failure (auth, branch protection, 422) at once
+          # rather than burning retries on a misleading message. The one read
+          # yields the blob SHA and the current pointer, and tells a real 404
+          # (first write) apart from a transient error worth retrying, so a blip
+          # can never empty the pointer and skip the regression check.
           ENCODED="$(printf '%s\n' "$BASE" | base64 | tr -d '\n')"
           updated=false
           for attempt in 1 2 3 4 5; do
             read_err="$(mktemp)"
             if obj="$(gh api "repos/$REPO/contents/$SERIES?ref=channels" 2>"$read_err")"; then
               CURRENT_SHA="$(jq -r '.sha // empty' <<< "$obj")"
+              # || true scopes to the local decode only (the network/auth failure
+              # is handled by the elif/else), so malformed content reads as empty.
+              current_base="$(jq -r '.content // empty' <<< "$obj" | base64 -d 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
             elif grep -qiE 'HTTP 404|Not Found' "$read_err"; then
               CURRENT_SHA="" # file absent, this is the first write
+              current_base=""
             else
-              echo "Could not read channels/$SERIES SHA (attempt $attempt), retrying:"
+              echo "Could not read channels/$SERIES (attempt $attempt), retrying:"
               cat "$read_err"
               rm -f "$read_err"
               sleep "$((attempt * 3))"
               continue
             fi
             rm -f "$read_err"
+
+            # Advance only. If the channel already serves a newer patch, leave it.
+            case "$current_base" in
+              */php-*)
+                current_ver="${current_base##*/php-}"
+                newest="$(printf '%s\n%s\n' "$current_ver" "$EXACT" | sort -V | tail -n1)"
+                if [[ "$current_ver" != "$EXACT" && "$newest" == "$current_ver" ]]; then
+                  echo "::warning::channels/$SERIES already points at php-$current_ver, newer than this build's php-$EXACT. Leaving the pointer unchanged."
+                  echo "Pointer channels/$SERIES left at php-$current_ver"
+                  exit 0
+                fi
+                ;;
+            esac
 
             put_args=(-f "message=chore(channels): point $SERIES at $TAG" -f "content=$ENCODED" -f branch=channels)
             [[ -n "$CURRENT_SHA" ]] && put_args+=(-f "sha=$CURRENT_SHA")
@@ -317,7 +325,7 @@ jobs:
               updated=true
               break
             fi
-            if grep -qiE 'HTTP 409|HTTP 422|does not match|is at|conflict' "$put_err"; then
+            if grep -qiE 'HTTP 409|does not match|is at|conflict' "$put_err"; then
               echo "channels/$SERIES write raced a concurrent arm (attempt $attempt). Retrying."
               rm -f "$put_err"
               sleep "$((attempt * 3))"
