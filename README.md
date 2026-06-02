@@ -161,9 +161,19 @@ Scope: same as the root action — Linux x86_64, PHP 8.3/8.4/8.5. For monorepo /
 
 ## Why
 
-Third-party GH Actions runners (Depot, Blacksmith, Namespace, BuildJet) get flagged as self-hosted, so `shivammathur/setup-php` falls back to a PPA install (~85s on Depot vs ~6s on GH-hosted). A pre-built static binary skips that.
+Third-party GH Actions runners (Depot, Blacksmith, Namespace, BuildJet) get flagged as self-hosted, so `shivammathur/setup-php` falls back to a PPA install + apt dependency fetch + extension compile instead of the pre-built tarball it downloads on GH-hosted runners. A pre-built static binary skips that fallback entirely.
 
-Context and benchmarks: [publicala/publicanow#7](https://github.com/publicala/publicanow/pull/7).
+Install step, measured on Depot (`depot-ubuntu-24.04`), N=3 runs, variance ≤5s:
+
+| Strategy | Install step |
+|----------|--------------|
+| GH-hosted `ubuntu-24.04` + `setup-php` | ~6s (baseline) |
+| Depot `depot-ubuntu-24.04` + `setup-php` | ~83s |
+| Depot + `lorisleiva/laravel-docker` container | ~9s (+ ~35s cold image pull) |
+| Depot + `php.new` static | ~5s (8.5-only at the time) |
+| **Depot + `publicala/php-ci-static`** | **<1s** |
+
+The slow path triggers whenever a runner reports `RUNNER_ENVIRONMENT=self-hosted`, which every third-party provider does even though their images mirror GitHub's own. Prior art, with the maintainer's rationale for not special-casing these runners: [`shivammathur/setup-php#1056`](https://github.com/shivammathur/setup-php/issues/1056).
 
 ## Available releases
 
@@ -213,7 +223,7 @@ pcov, xdebug
 - **mysql / postgres / redis client binaries** — same, use a container.
 - **ghostscript, chromium** — system tools; out of scope for a static binary.
 
-The pla-stack [runners reference](https://github.com/publicala/pla-stack/blob/main/references/github-actions-runners.md) documents the full three-tier strategy (static PHP → community container → custom container).
+Three-tier strategy: static PHP for the common Laravel CI workload, [`lorisleiva/laravel-docker`](https://github.com/lorisleiva/laravel-docker) when a job needs a fuller toolchain (node, client binaries), and a custom container when it needs everything. Each job picks the lightest tier that covers it.
 
 ## Manual install (no GitHub Actions)
 

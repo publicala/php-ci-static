@@ -171,7 +171,9 @@ jobs:
               BASE=https://github.com/$REPO/releases/download/$TAG
               curl -fsSL -O "\$BASE/php-linux-x86_64"
               curl -fsSL -O "\$BASE/SHA256SUMS"
-              sha256sum -c SHA256SUMS --ignore-missing
+              # Pipe the matching line into \`-c\` rather than using
+              # \`--ignore-missing\`, which exits 0 even when nothing matched.
+              grep ' php-linux-x86_64\$' SHA256SUMS | sha256sum -c -
               chmod +x php-linux-x86_64
               sudo mv php-linux-x86_64 /usr/local/bin/php
               php -v
