@@ -128,7 +128,16 @@ jobs:
           cp buildroot/bin/php dist/php-linux-x86_64
           cp buildroot/modules/xdebug.so dist/xdebug-linux-x86_64.so
           cp buildroot/modules/pcov.so dist/pcov-linux-x86_64.so
-          (cd dist && sha256sum php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so > SHA256SUMS)
+          command -v zstd >/dev/null \
+            || { echo "::error::zstd is required to publish compressed release assets"; exit 1; }
+          zstd --version
+          zstd -T0 -19 -f dist/php-linux-x86_64
+          zstd -T0 -19 -f dist/xdebug-linux-x86_64.so
+          zstd -T0 -19 -f dist/pcov-linux-x86_64.so
+          (cd dist && sha256sum \
+            php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so \
+            php-linux-x86_64.zst xdebug-linux-x86_64.so.zst pcov-linux-x86_64.so.zst \
+            > SHA256SUMS)
           ls -la dist/
 
       - uses: actions/upload-artifact@v7
@@ -182,8 +191,14 @@ jobs:
 
           ~~~bash
           BASE=$BASE
-          curl -fsSL -O "\$BASE/php-linux-x86_64"
           curl -fsSL -O "\$BASE/SHA256SUMS"
+          if command -v zstd >/dev/null && grep -q ' php-linux-x86_64.zst\$' SHA256SUMS; then
+            curl -fsSL -O "\$BASE/php-linux-x86_64.zst"
+            grep ' php-linux-x86_64.zst\$' SHA256SUMS | sha256sum -c -
+            zstd -d -f php-linux-x86_64.zst -o php-linux-x86_64
+          else
+            curl -fsSL -O "\$BASE/php-linux-x86_64"
+          fi
           # Pipe the matching line into \`-c\` rather than using
           # \`--ignore-missing\`, which exits 0 even when nothing matched.
           grep ' php-linux-x86_64\$' SHA256SUMS | sha256sum -c -
@@ -207,6 +222,9 @@ jobs:
             dist/php-linux-x86_64
             dist/xdebug-linux-x86_64.so
             dist/pcov-linux-x86_64.so
+            dist/php-linux-x86_64.zst
+            dist/xdebug-linux-x86_64.so.zst
+            dist/pcov-linux-x86_64.so.zst
             dist/SHA256SUMS
           )
 
@@ -229,22 +247,62 @@ jobs:
             else
               # Published and immutable. Confirm every asset is present before
               # repointing, so a partial prior publish cannot strand the pointer
-              # on a broken release.
+              # on a broken release. Compressed assets are best-effort for
+              # existing releases because immutable release assets cannot be
+              # added after publish.
               present="$(jq -r '.assets[].name' <<< "$view_json")"
-              for asset in php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so SHA256SUMS; do
+              required_assets=(php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so SHA256SUMS)
+              compressed_assets=(php-linux-x86_64.zst xdebug-linux-x86_64.so.zst pcov-linux-x86_64.so.zst)
+
+              for asset in "${required_assets[@]}"; do
                 grep -qx "$asset" <<< "$present" \
                   || { echo "::error::existing release $TAG is missing asset $asset"; exit 1; }
               done
+
+              missing_compressed=()
+              for asset in "${compressed_assets[@]}"; do
+                grep -qx "$asset" <<< "$present" || missing_compressed+=("$asset")
+              done
+              if (( ${#missing_compressed[@]} > 0 )); then
+                echo "::warning::existing immutable release $TAG is missing compressed assets: ${missing_compressed[*]}. Leaving it unchanged. The action falls back to raw downloads."
+              fi
+
               need_create=false
-              echo "Release $TAG already exists with all assets (immutable). Skipping upload."
+              echo "Release $TAG already exists with required assets (immutable). Skipping upload."
 
               # Immutability forbids updating published assets, so a rebuild that
               # produced different bytes for this same patch can never ship. Warn
               # so the no-op is visible instead of silently discarding the build.
               pubdir="$(mktemp -d)"
-              if gh release download "$TAG" --pattern SHA256SUMS --dir "$pubdir" --clobber 2>/dev/null \
-                 && ! diff -q "$pubdir/SHA256SUMS" dist/SHA256SUMS >/dev/null 2>&1; then
-                echo "::warning::rebuilt $TAG differs from the published immutable release. Immutability blocks updating its assets, so these bytes will not ship. Bump the PHP patch to release new binaries."
+              checksum_for() {
+                local file="$1"
+                local asset="$2"
+
+                awk -v asset="$asset" '
+                  $1 ~ /^[0-9a-f]{64}$/ && $2 == asset { print $1; found = 1; exit }
+                  END { if (! found) exit 1 }
+                ' "$file"
+              }
+
+              if gh release download "$TAG" --pattern SHA256SUMS --dir "$pubdir" --clobber 2>/dev/null; then
+                raw_differs=false
+                for asset in php-linux-x86_64 xdebug-linux-x86_64.so pcov-linux-x86_64.so; do
+                  published_checksum="$(checksum_for "$pubdir/SHA256SUMS" "$asset" || true)"
+                  built_checksum="$(checksum_for dist/SHA256SUMS "$asset" || true)"
+                  if [[ -z "$published_checksum" ]]; then
+                    echo "::error::published release $TAG SHA256SUMS is missing $asset"
+                    exit 1
+                  fi
+                  if [[ -z "$built_checksum" ]]; then
+                    echo "::error::new build SHA256SUMS is missing $asset"
+                    exit 1
+                  fi
+                  [[ "$published_checksum" == "$built_checksum" ]] || raw_differs=true
+                done
+
+                if [[ "$raw_differs" == "true" ]]; then
+                  echo "::warning::rebuilt $TAG differs from the published immutable release. Immutability blocks updating its assets, so these bytes will not ship. Bump the PHP patch to release new binaries."
+                fi
               fi
               rm -rf "$pubdir"
             fi

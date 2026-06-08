@@ -87,6 +87,36 @@ jobs:
             || { echo "::error::PATH resolves to $(command -v composer), expected $ACTION_COMPOSER"; exit 1; }
           composer --version | grep -F "Composer version"
 
+  runtime-cache-reuse:
+    name: runtime cache can be reused
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: first
+        uses: ./
+        with:
+          php-version: '8.4'
+
+      - id: second
+        uses: ./
+        with:
+          php-version: '8.4'
+
+      - name: Probe cache hit
+        env:
+          FIRST_HIT: ${{ steps.first.outputs.runtime-cache-hit }}
+          SECOND_HIT: ${{ steps.second.outputs.runtime-cache-hit }}
+        run: |
+          set -euo pipefail
+
+          echo "First runtime cache hit: ${FIRST_HIT:-false}"
+          echo "Second runtime cache hit: ${SECOND_HIT:-false}"
+
+          [[ "$SECOND_HIT" == "true" ]] \
+            || { echo "::error::expected second setup to hit the runtime cache"; exit 1; }
+          php -v | grep -F "PHP 8.4."
+
   ini-values:
     name: ini-values composes with coverage
     runs-on: depot-ubuntu-24.04

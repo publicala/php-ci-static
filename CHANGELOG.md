@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.7.0
+
+- Add a runtime asset cache to the root action. The action now resolves
+  the concrete `php-X.Y.Z` release, downloads a fresh `SHA256SUMS`, and
+  restores the PHP binary plus both coverage modules from the consuming
+  repository's GitHub Actions cache when the cached files verify against
+  that checksum. Cache misses download and verify the release assets,
+  then save immediately with `actions/cache/save@v5`, so a seed job can
+  populate fan-out jobs before the job ends. The root action now exposes
+  `runtime-cache-hit` for diagnostics. Cache restore/save failures stay
+  non-fatal, but now emit explicit warnings before falling back to
+  release downloads.
+
+- Publish `.zst` copies of the PHP binary and coverage modules for new
+  immutable PHP releases. The action uses them automatically when `zstd`
+  is available and falls back to raw assets for old raw-only releases or
+  runners without `zstd`. Raw assets remain published for compatibility.
+
+- Keep existing immutable PHP releases idempotent. Rebuilds of an
+  already-published patch still require the original raw assets and
+  `SHA256SUMS`, but missing `.zst` assets only warn because immutable
+  releases cannot be amended after publish.
+
+- Add deterministic Bash tests for the runtime asset helpers, covering
+  raw downloads, `.zst` downloads, corrupt assets, missing checksum
+  entries, and cache-ready verification.
+
 ## v1.6.1
 
 - Resolve binaries through a channel pointer instead of the sliding
