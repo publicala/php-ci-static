@@ -11,7 +11,7 @@ Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/c
     coverage: pcov           # optional, default: none
 ```
 
-That's it. The action resolves the current `8.4` binary release, downloads it, verifies the checksum, puts both `php` and `composer` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls see it automatically.
+That's it. The action resolves the current `8.4` binary release, restores the verified runtime assets from GitHub's cache when available, puts both `php` and `composer` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls see it automatically.
 
 ## Development
 
@@ -39,11 +39,17 @@ The action also drops a baseline `memory_limit=-1` into the scan dir on every ru
 
 Composer (stable) is always installed alongside `php`. It's a ~2-3s download and every realistic CI job needs it, so there's no opt-out.
 
+The PHP binary and coverage modules are cached by concrete release tag and `SHA256SUMS` hash. The cache lives in the consuming repository's Actions cache, so one seed job can populate it for the fan-out jobs that follow. Cache misses download release assets with retries, verify them against a fresh checksum file, and save immediately after verification. Composer is not cached here because `composer-stable.phar` is a rolling download.
+
+Output: `runtime-cache-hit` is the string `true` when the PHP runtime cache restored an exact match. Most consumers do not need it, but it is useful for CI diagnostics.
+
 ## Examples
 
 ### Default (no coverage, fastest)
 
 The static binary covers the common Laravel CI workload: lint, phpstan, pint, tests against MySQL / Postgres / SQLite / Redis. JIT is on.
+
+On a cold runtime cache, the action downloads the PHP binary plus both coverage modules so the same verified cache can serve later `pcov` and `xdebug` jobs. On a hit, `coverage: none` still avoids loading coverage extensions.
 
 ```yaml
 - uses: publicala/php-ci-static@v1
@@ -185,14 +191,17 @@ Every build publishes one immutable release per PHP patch, tagged `php-<version>
 
 The organization enforces immutable releases, so binaries can no longer be overwritten in place. Publishing each patch as its own immutable release (and sliding a tiny text pointer instead of the assets) keeps "latest" working while every published binary stays tamper-proof and verifiable. The pre-immutability `latest-8.x` releases are frozen. The action falls back to them only if the pointer is unreachable.
 
-Each release publishes three assets plus a checksum file:
+Each release publishes raw assets, zstd-compressed copies, and a checksum file:
 
 - `php-linux-x86_64`: static PHP CLI binary, all extensions baked in
 - `pcov-linux-x86_64.so`: fast coverage driver, opt-in
 - `xdebug-linux-x86_64.so`: xdebug Zend extension, opt-in
-- `SHA256SUMS`: checksums for all three
+- `*.zst`: compressed copies of the three assets above, used automatically when `zstd` is available
+- `SHA256SUMS`: checksums for raw and compressed assets
 
 pcov and xdebug are shared-only in static-php-cli, so they ship as separate `.so` files. Both are zero-cost when not loaded.
+
+Older immutable `php-*` releases may be raw-only. The action checks `SHA256SUMS` before choosing the download path, so those releases keep working through the raw fallback.
 
 ## Extensions
 
@@ -234,8 +243,14 @@ For Forge, raw shell, or any non-Actions runner. Resolve the current release for
 ```bash
 SERIES=8.4
 BASE=$(curl -fsSL "https://raw.githubusercontent.com/publicala/php-ci-static/channels/$SERIES")
-curl -fsSL -O "$BASE/php-linux-x86_64"
 curl -fsSL -O "$BASE/SHA256SUMS"
+if command -v zstd >/dev/null && grep -q ' php-linux-x86_64.zst$' SHA256SUMS; then
+  curl -fsSL -O "$BASE/php-linux-x86_64.zst"
+  grep ' php-linux-x86_64.zst$' SHA256SUMS | sha256sum -c -
+  zstd -d -f php-linux-x86_64.zst -o php-linux-x86_64
+else
+  curl -fsSL -O "$BASE/php-linux-x86_64"
+fi
 grep ' php-linux-x86_64$' SHA256SUMS | sha256sum -c -
 chmod +x php-linux-x86_64
 sudo mv php-linux-x86_64 /usr/local/bin/php

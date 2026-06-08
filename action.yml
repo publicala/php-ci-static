@@ -20,6 +20,11 @@ inputs:
     required: false
     default: ''
 
+outputs:
+  runtime-cache-hit:
+    description: The string "true" when the PHP runtime cache was an exact match.
+    value: ${{ steps.runtime-cache.outputs.cache-hit }}
+
 runs:
   using: 'composite'
   steps:
@@ -98,18 +103,13 @@ runs:
             done
         fi
 
-    - name: Install static PHP
+    - name: Resolve release
+      id: release
       shell: bash
       env:
         PHP_VERSION: ${{ inputs.php-version }}
-        COVERAGE: ${{ inputs.coverage }}
-        INI_VALUES: ${{ inputs.ini-values }}
       run: |
         set -euo pipefail
-
-        ROOT="$RUNNER_TEMP/php-ci-static"
-        BIN="$ROOT/bin"
-        CONFD="$ROOT/conf.d"
 
         # Resolve the current immutable release for this PHP series from the
         # channel pointer. The organization enforces immutable releases, so
@@ -143,9 +143,67 @@ runs:
             ;;
         esac
 
+        TAG="${BASE##*/}"
+        SUMS_DIR="$RUNNER_TEMP/php-ci-static-release"
+        rm -rf "$SUMS_DIR"
+        mkdir -p "$SUMS_DIR"
+        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
+          -o "$SUMS_DIR/SHA256SUMS" "$BASE/SHA256SUMS"
+
+        SUMS_HASH="$(sha256sum "$SUMS_DIR/SHA256SUMS" | awk '{ print $1 }')"
+        CACHE_KEY="php-ci-static-runtime-v2-${RUNNER_OS}-${RUNNER_ARCH}-${TAG}-${SUMS_HASH}"
+        CACHE_PATH="${RUNNER_TEMP}/php-ci-static-runtime-cache/${TAG}/${SUMS_HASH}"
+
+        {
+          echo "base=$BASE"
+          echo "tag=$TAG"
+          echo "sums-hash=$SUMS_HASH"
+          echo "cache-key=$CACHE_KEY"
+          echo "cache-path=$CACHE_PATH"
+          echo "sums-path=$SUMS_DIR/SHA256SUMS"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore runtime cache
+      id: runtime-cache
+      uses: actions/cache/restore@v5
+      continue-on-error: true
+      with:
+        path: ${{ steps.release.outputs.cache-path }}
+        key: ${{ steps.release.outputs.cache-key }}
+
+    - name: Report runtime cache restore failure
+      if: steps.runtime-cache.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::warning::PHP runtime cache restore failed. Continuing with release asset downloads."
+
+    - name: Install static PHP
+      id: install
+      shell: bash
+      env:
+        PHP_VERSION: ${{ inputs.php-version }}
+        COVERAGE: ${{ inputs.coverage }}
+        INI_VALUES: ${{ inputs.ini-values }}
+        BASE: ${{ steps.release.outputs.base }}
+        TAG: ${{ steps.release.outputs.tag }}
+        FRESH_SUMS: ${{ steps.release.outputs.sums-path }}
+        DIST: ${{ steps.release.outputs.cache-path }}
+        CACHE_HIT: ${{ steps.runtime-cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+
+        ROOT="$RUNNER_TEMP/php-ci-static"
+        BIN="$ROOT/bin"
+        CONFD="$ROOT/conf.d"
+        WORK="$(mktemp -d)"
+        trap 'rm -rf "$WORK"' EXIT
+
+        # shellcheck disable=SC1090,SC1091
+        source "$GITHUB_ACTION_PATH/scripts/runtime-assets.bash"
+
         # Idempotent: clean before staging in case the action runs twice in one job.
         rm -rf "$ROOT"
-        mkdir -p "$BIN" "$CONFD"
+        mkdir -p "$BIN" "$CONFD" "$DIST"
 
         # CI baseline ini, loaded first by alphabetical scan order so user
         # `ini-values` (custom.ini) and `coverage` (coverage.ini) win. The
@@ -158,25 +216,22 @@ runs:
         # the job exits 255 silently.
         printf 'memory_limit=-1\n' > "$CONFD/00-ci-defaults.ini"
 
-        cd "$(mktemp -d)"
-        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL -O "$BASE/php-linux-x86_64"
-        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL -O "$BASE/SHA256SUMS"
-
-        # `sha256sum -c --ignore-missing` exits 0 if the assets you downloaded
-        # don't appear in SHA256SUMS at all, so we assert the line exists first,
-        # then check exactly that line.
-        verify() {
-          local name="$1"
-          if ! grep -Eq "^[0-9a-f]{64}  ${name}$" SHA256SUMS; then
-            echo "::error::SHA256SUMS missing entry for ${name}"
-            exit 1
+        if php_ci_static_runtime_cache_is_ready "$FRESH_SUMS" "$DIST"; then
+          echo "Using cached PHP runtime assets for ${TAG}."
+          cp "$FRESH_SUMS" "$DIST/SHA256SUMS"
+        else
+          if [[ "$CACHE_HIT" == "true" ]]; then
+            echo "::warning::restored PHP runtime cache for ${TAG} did not verify. Downloading fresh assets."
+          else
+            echo "Downloading PHP runtime assets for ${TAG}."
           fi
-          grep " ${name}$" SHA256SUMS | sha256sum -c -
-        }
-        verify "php-linux-x86_64"
+          rm -rf "$DIST"
+          mkdir -p "$DIST"
+          php_ci_static_download_runtime_assets "$BASE" "$FRESH_SUMS" "$DIST" "$WORK"
+        fi
 
-        chmod +x php-linux-x86_64
-        mv php-linux-x86_64 "$BIN/php"
+        cp "$DIST/php-linux-x86_64" "$BIN/php"
+        chmod +x "$BIN/php"
         echo "$BIN" >> "$GITHUB_PATH"
 
         # composer-stable.phar is a rolling release (no fixed hash to pin
@@ -188,9 +243,7 @@ runs:
 
         if [[ "$COVERAGE" != "none" ]]; then
           asset="${COVERAGE}-linux-x86_64.so"
-          curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL -O "$BASE/$asset"
-          verify "$asset"
-          mv "$asset" "$CONFD/${COVERAGE}.so"
+          cp "$DIST/$asset" "$CONFD/${COVERAGE}.so"
 
           case "$COVERAGE" in
             pcov)
@@ -289,3 +342,20 @@ runs:
         echo "::group::composer --version"
         composer --version
         echo "::endgroup::"
+
+        echo "cache-ready=true" >> "$GITHUB_OUTPUT"
+
+    - name: Save runtime cache
+      id: save-runtime-cache
+      if: steps.runtime-cache.outputs.cache-hit != 'true' && steps.install.outputs.cache-ready == 'true'
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ steps.release.outputs.cache-path }}
+        key: ${{ steps.release.outputs.cache-key }}
+
+    - name: Report runtime cache save failure
+      if: steps.save-runtime-cache.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::warning::PHP runtime cache save failed. Future jobs may need to download release assets again."
