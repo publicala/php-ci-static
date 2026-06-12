@@ -1,4 +1,17 @@
-name: Test action
+name: CI
+
+# Single CI workflow. It runs the action's test suite and, on main, cuts a
+# release when CHANGELOG.md gains a new `## vX.Y.Z` header. The two used to
+# live in separate workflow files. They were merged because a job can only
+# `needs:` jobs in its own workflow: an aggregate status check (see
+# ci-success below) and the release gate that depends on it can only see the
+# test jobs if they share one workflow.
+#
+# Trigger scoping that the two original files differed on is preserved with
+# job-level `if` conditions (see the `changes` job): the release family runs
+# on push only when CHANGELOG.md or this workflow changed, exactly as the
+# path-filtered release workflow did, while the test jobs keep running on
+# every push, pull request, and dispatch.
 
 on:
   push:
@@ -6,14 +19,67 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege at the workflow level: the test and validation jobs only
+# read the checkout. The release job opts up to `contents: write` at the job
+# level because it creates tags and releases.
 permissions:
   contents: read
 
+# One run per ref, and never cancel a run in flight. The test suite gives up
+# its old auto-cancel of superseded runs so that a run which may be cutting a
+# release is never interrupted partway through tagging or publishing.
 concurrency:
-  group: test-action-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  # Detects, on push events, whether this push touched the files that used to
+  # path-filter the release workflow (CHANGELOG.md or this workflow file). The
+  # release family gates on its output so a plain code push to main no longer
+  # triggers the changelog validator or the release job, matching the old
+  # path-filtered trigger. On pull_request and workflow_dispatch there was no
+  # path filter, so those events are handled directly in each job's `if`.
+  changes:
+    name: Detect release-relevant changes
+    if: github.event_name == 'push'
+    runs-on: depot-ubuntu-24.04
+    outputs:
+      release_paths: ${{ steps.filter.outputs.release_paths }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Diff push range for release-relevant paths
+        id: filter
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # A new branch or a force-push can report an all-zero or unreachable
+          # `before` SHA. In that case we cannot compute a reliable diff, so we
+          # fail open and let the release family run: the release job is fully
+          # idempotent (it no-ops when the top version is already tagged), so an
+          # extra run is safe, whereas a missed release is not.
+          if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "release_paths=true" >> "$GITHUB_OUTPUT"
+            echo "No usable base commit for the diff; treating release paths as changed."
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BEFORE" "$AFTER" \
+            -- CHANGELOG.md .github/workflows/test-action.yml)
+          if [[ -n "$changed" ]]; then
+            echo "release_paths=true" >> "$GITHUB_OUTPUT"
+            echo "Release-relevant paths changed:"
+            while IFS= read -r file; do
+              printf '  - %s\n' "$file"
+            done <<< "$changed"
+          else
+            echo "release_paths=false" >> "$GITHUB_OUTPUT"
+            echo "No release-relevant paths changed in this push."
+          fi
+
   lint-tooling:
     name: Lint tooling
     runs-on: depot-ubuntu-24.04
@@ -428,3 +494,334 @@ jobs:
           set -euo pipefail
           [[ "$(php -r 'echo ini_get("memory_limit");')" == "512M" ]] \
             || { echo "::error::ini-values not applied"; exit 1; }
+
+  # Release pipeline, formerly its own workflow. Cuts an action release
+  # whenever CHANGELOG.md gains a new `## vX.Y.Z` header on main. Source of
+  # truth is the top header. The flow:
+  #   1. Validates the header shape (also runs on PR so format drift fails fast).
+  #   2. Guards that PRs touching the composite actions also bump the CHANGELOG.
+  #   3. Per-artifact idempotency: each of {immutable tag, sliding tag,
+  #      GitHub Release} is reconciled independently, so a partial failure
+  #      in any one step can be repaired by re-running the workflow.
+  #   4. Extracts the markdown block between the matching version header and
+  #      the next `## ` header of any kind for release notes.
+  #
+  # `workflow_dispatch` is exposed for retroactive releases. Dispatch from
+  # main: the workflow walks CHANGELOG.md history to find the commit that
+  # introduced the current top version and tags THAT commit, regardless
+  # of where main's HEAD is. So a release missed at the time of merge can
+  # be cut later even after unrelated commits have landed on main, without
+  # loosening the refs/heads/main safety gate.
+  validate:
+    name: Validate changelog header
+    # On push this used to be path-filtered to CHANGELOG.md / the workflow
+    # file. Pull requests and dispatches were never path-filtered, so they
+    # always run; pushes run only when the release-relevant paths changed.
+    # `!cancelled()` is required so this job is still evaluated when `changes`
+    # is skipped on pull_request / workflow_dispatch (it only runs on push);
+    # without a status function the skipped dependency would skip validate too.
+    if: >-
+      !cancelled()
+      && (
+        github.event_name != 'push'
+        || needs.changes.outputs.release_paths == 'true'
+      )
+    needs: changes
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check top header shape
+        run: |
+          set -euo pipefail
+          header=$(grep -m1 -E '^## ' CHANGELOG.md || true)
+          if [[ -z "$header" ]]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## ' header"
+            exit 1
+          fi
+          if ! [[ "$header" =~ ^##\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=CHANGELOG.md::Top header must be '## vX.Y.Z' exactly (got: $header)"
+            exit 1
+          fi
+          echo "OK: $header"
+
+  guard-changelog-bump:
+    name: Guard CHANGELOG bump when action.yml changes
+    if: github.event_name == 'pull_request'
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need both PR head and base for the diff and the base-CHANGELOG read.
+          fetch-depth: 0
+
+      - name: Check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE_SHA...HEAD" -- action.yml setup-php-vendor/action.yml)
+          if [[ -z "$changed" ]]; then
+            echo "No action.yml changes in this PR. Bump guard not applicable."
+            exit 0
+          fi
+          echo "PR modifies composite action files:"
+          while IFS= read -r file; do
+            printf '  - %s\n' "$file"
+          done <<< "$changed"
+
+          head_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | sed 's/^## v//')
+          # `git show base:CHANGELOG.md` reads the file as it stood on the PR base.
+          base_version=$(git show "$BASE_SHA:CHANGELOG.md" \
+            | grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sed 's/^## v//')
+
+          echo "Top version on base ($BASE_SHA): v$base_version"
+          echo "Top version on PR head:          v$head_version"
+
+          if [[ "$head_version" == "$base_version" ]]; then
+            echo "::error file=CHANGELOG.md::Composite action files changed but the top CHANGELOG header is still v$head_version. Add a new '## vX.Y.Z' block at the top of CHANGELOG.md (see the Versioning section at the bottom for the semver rules) so the release workflow can publish your change."
+            exit 1
+          fi
+
+          # Strict monotonic check: head must be strictly greater than base in
+          # semver order. Catches downgrades (`v1.5.2` -> `v1.5.1`) that would
+          # otherwise slip through `head != base`. `sort -V` does the right
+          # thing on plain `X.Y.Z`.
+          newest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
+          if [[ "$newest" != "$head_version" ]]; then
+            echo "::error file=CHANGELOG.md::Top CHANGELOG version went backwards: base is v$base_version, PR sets v$head_version. The release flow only moves forward. Bump the version above v$base_version."
+            exit 1
+          fi
+          echo "OK: bumped v$base_version -> v$head_version"
+
+  # Aggregate gate: the single status check branch rulesets require.
+  # It needs every automated CI job and reports one pass or fail, so the
+  # ruleset never changes when a CI job is renamed or added. Runs on job
+  # failure and skip but not when the run is cancelled, so cancelled runs
+  # report as cancelled instead of failed.
+  ci-success:
+    if: ${{ !cancelled() }}
+    needs:
+      - lint-tooling
+      - matrix
+      - runtime-cache-reuse
+      - ini-values
+      - ini-values-preserves-commas-in-values
+      - ini-values-supports-quoted-values
+      - ini-values-preserves-literal-quote-chars
+      - ini-values-rejects-bad-input
+      - setup-php-vendor-key-shape
+      - setup-php-vendor-php-version-in-key
+      - setup-php-vendor-dependency-path
+      - setup-php-vendor-empty-deps-fails
+      - setup-php-vendor-fail-on-cache-miss
+      - setup-php-vendor-ini-values-passthrough
+      - validate
+      - guard-changelog-bump
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+          # These two run only in a subset of events: guard-changelog-bump on
+          # pull_request, and validate on pull_request, dispatch, or a push
+          # that touched the release-relevant paths. A legitimate skip in the
+          # other events must not fail the gate. allowed-skips permits SKIPPED
+          # only — a real failure of either job still fails ci-success.
+          allowed-skips: validate, guard-changelog-bump
+
+  release:
+    name: Cut release
+    # Wired to need the aggregate gate so a red CI run can never publish a
+    # release. `ci-success` reports success only when every CI job it
+    # aggregates passed (or legitimately skipped), and it transitively covers
+    # `validate`, so requiring `ci-success == success` also guarantees the
+    # changelog header validated. `changes` is needed only for its output.
+    needs: [changes, ci-success]
+    # Hard-gate to main only. Without the ref check, a maintainer dispatching
+    # the workflow from a feature branch would publish vX.Y.Z and move vX
+    # from unmerged code. On push, the original path filter (CHANGELOG.md /
+    # the workflow file) is reproduced through the `changes` job so a plain
+    # code push to main does not cut a release; dispatch keeps running
+    # regardless of paths, as before.
+    #
+    # `!cancelled()` is required so this job is still evaluated when `changes`
+    # is skipped (it only runs on push). Without a status function in the `if`,
+    # a skipped dependency would silently skip the release on workflow_dispatch.
+    # The explicit `needs.ci-success.result == 'success'` keeps the green-CI
+    # gate intact under that `!cancelled()` relaxation.
+    if: >-
+      !cancelled()
+      && needs.ci-success.result == 'success'
+      && github.ref == 'refs/heads/main'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'push' && needs.changes.outputs.release_paths == 'true')
+      )
+    runs-on: depot-ubuntu-24.04
+    # Opt up from the workflow-level read-only default: tagging and publishing
+    # releases needs write access to repository contents.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history + tags so we can peel vX.Y.Z to its commit locally.
+          fetch-depth: 0
+
+      - name: Read top version
+        id: ver
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | sed 's/^## v//')
+          major=${version%%.*}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+          echo "Top version: v$version (major: v$major)"
+
+      - name: Find introduction commit for this version
+        id: intro
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Walk CHANGELOG.md history oldest→newest. The introduction commit
+          # is the first one where the top `## vX.Y.Z` header equals VERSION
+          # (i.e., the transition from "previous version at top" to "VERSION
+          # at top"). This lets workflow_dispatch on main cut a release for
+          # a version whose merge commit is no longer HEAD. It is needed
+          # because the safety gate restricts the job to refs/heads/main,
+          # and `--ref <older-commit>` would otherwise be blocked.
+          release_sha=""
+          prev=""
+          while IFS= read -r sha; do
+            v=$(git show "$sha:CHANGELOG.md" 2>/dev/null \
+              | grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sed 's/^## v//' || true)
+            if [[ -z "$v" ]]; then continue; fi
+            if [[ "$prev" != "$VERSION" && "$v" == "$VERSION" ]]; then
+              release_sha=$sha
+            fi
+            prev=$v
+          done < <(git log --reverse --format=%H -- CHANGELOG.md)
+
+          if [[ -z "$release_sha" ]]; then
+            echo "::error file=CHANGELOG.md::Could not find commit where v$VERSION was introduced at the top of CHANGELOG.md. Aborting."
+            exit 1
+          fi
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "Release commit for v$VERSION: $release_sha"
+
+      - name: Check immutable tag state
+        id: tag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Three outcomes, compared against the introduction commit (not
+          # GITHUB_SHA, since dispatches on main may run from HEAD past the
+          # release commit):
+          #   absent            → create the tag at RELEASE_SHA
+          #   present_here      → tag already at RELEASE_SHA. Reconcile
+          #                       downstream artifacts (sliding tag, release).
+          #                       Partial-failure recovery path.
+          #   present_elsewhere → tag exists at a different commit. This is
+          #                       an out-of-band state we don't want to
+          #                       paper over → no-op the whole job.
+          if ! git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "state=absent" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION does not exist yet. Will create at $RELEASE_SHA."
+            exit 0
+          fi
+          tag_commit=$(git rev-list -n 1 "v$VERSION")
+          if [[ "$tag_commit" == "$RELEASE_SHA" ]]; then
+            echo "state=present_here" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION already at $RELEASE_SHA. Reconciling downstream artifacts."
+          else
+            echo "state=present_elsewhere" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION already at $tag_commit (introduction commit is $RELEASE_SHA). Out-of-band state, no-op."
+          fi
+
+      - name: Extract release notes
+        if: steps.tag.outputs.state != 'present_elsewhere'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v ver="$VERSION" '
+            BEGIN { capture = 0 }
+            /^## / {
+              if (capture) exit
+              if ($0 == "## v" ver) { capture = 1; next }
+            }
+            capture { print }
+          ' CHANGELOG.md \
+            | awk 'NF { found=1 } found' \
+            | awk '{ lines[NR] = $0 } END { last = NR; while (last > 0 && lines[last] == "") last--; for (i = 1; i <= last; i++) print lines[i] }' \
+            > release-notes.md
+          echo "::group::release-notes.md"
+          cat release-notes.md
+          echo "::endgroup::"
+
+      - name: Create immutable tag
+        if: steps.tag.outputs.state == 'absent'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Create the tag through the API, not `git push`. A release commit can
+          # touch .github/workflows/*, and the default GITHUB_TOKEN (a GitHub App)
+          # is refused when a pushed ref carries workflow changes. The REST API
+          # anchors the annotated tag to the introduction commit without that
+          # restriction, so a dispatch with HEAD past the release commit still
+          # tags the correct commit.
+          tag_sha="$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/tags" \
+            -f tag="v$VERSION" -f message="v$VERSION" \
+            -f object="$RELEASE_SHA" -f type=commit --jq .sha)"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/v$VERSION" -f sha="$tag_sha" >/dev/null
+          echo "Tagged v$VERSION at $RELEASE_SHA"
+
+      - name: Move sliding tag
+        if: steps.tag.outputs.state != 'present_elsewhere'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAJOR: ${{ steps.ver.outputs.major }}
+          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Idempotent: if the sliding tag already points at RELEASE_SHA, no-op.
+          # Otherwise force-move (PATCH) or create (POST). Same shape the build
+          # workflow uses for the latest-X.Y tags.
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" --jq .object.sha 2>/dev/null || true)
+          if [[ -z "$current" ]]; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/v$MAJOR" -f sha="$RELEASE_SHA" >/dev/null
+            echo "Created sliding tag v$MAJOR at $RELEASE_SHA"
+          elif [[ "$current" == "$RELEASE_SHA" ]]; then
+            echo "Sliding tag v$MAJOR already at $RELEASE_SHA. No-op"
+          else
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" \
+              -f sha="$RELEASE_SHA" -F force=true >/dev/null
+            echo "Moved sliding tag v$MAJOR: $current → $RELEASE_SHA"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.tag.outputs.state != 'present_elsewhere'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists. No-op"
+            exit 0
+          fi
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file release-notes.md
+          echo "Published release v$VERSION"
