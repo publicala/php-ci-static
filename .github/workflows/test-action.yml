@@ -558,9 +558,15 @@ jobs:
       - name: Check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          changed=$(git diff --name-only "$BASE_SHA...HEAD" -- action.yml setup-php-vendor/action.yml)
+          # Diff and read CHANGELOG.md at the PR head, never at the checked-out
+          # merge ref: the merge ref folds in everything main gained after the
+          # PR branched, which both fails innocent PRs (main's action.yml change
+          # attributed to the PR) and lets main's merged-in version bump mask a
+          # missing one in the PR itself.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- action.yml setup-php-vendor/action.yml)
           if [[ -z "$changed" ]]; then
             echo "No action.yml changes in this PR. Bump guard not applicable."
             exit 0
@@ -570,11 +576,16 @@ jobs:
             printf '  - %s\n' "$file"
           done <<< "$changed"
 
-          head_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | sed 's/^## v//')
-          # `git show base:CHANGELOG.md` reads the file as it stood on the PR base.
-          base_version=$(git show "$BASE_SHA:CHANGELOG.md" \
-            | grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sed 's/^## v//')
+          # Read each blob into a variable before matching, rather than piping
+          # `git show` straight into `grep -m1`: grep closes the pipe after the
+          # first header, and on a CHANGELOG.md larger than the pipe buffer
+          # `git show` then dies with SIGPIPE, which `pipefail` turns into a
+          # false-red guard failure. The substitution still aborts on a genuine
+          # `git show` failure.
+          head_changelog=$(git show "$HEAD_SHA:CHANGELOG.md")
+          head_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$head_changelog" | sed 's/^## v//')
+          base_changelog=$(git show "$BASE_SHA:CHANGELOG.md")
+          base_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$base_changelog" | sed 's/^## v//')
 
           echo "Top version on base ($BASE_SHA): v$base_version"
           echo "Top version on PR head:          v$head_version"
