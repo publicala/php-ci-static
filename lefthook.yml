@@ -5,7 +5,7 @@ pre-commit:
   commands:
     "fix:prettier":
       run: npm run format:staged -- {staged_files}
-      glob: "{package.json,package-lock.json,lefthook.yml}"
+      glob: "{package.json,package-lock.json,lefthook.yml,**/*.md,**/*.mdx}"
       stage_fixed: true
     "test:tooling":
       run: npm test

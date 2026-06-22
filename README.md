@@ -25,11 +25,11 @@ npm run hooks:install
 
 ## Inputs
 
-| Input | Required | Default | Accepted values |
-|-------|----------|---------|-----------------|
-| `php-version` | yes | n/a | `8.3`, `8.4`, `8.5` |
-| `coverage` | no | `none` | `none`, `pcov`, `xdebug` |
-| `ini-values` | no | `''` | Comma-separated `key=value` pairs |
+| Input         | Required | Default | Accepted values                   |
+| ------------- | -------- | ------- | --------------------------------- |
+| `php-version` | yes      | n/a     | `8.3`, `8.4`, `8.5`               |
+| `coverage`    | no       | `none`  | `none`, `pcov`, `xdebug`          |
+| `ini-values`  | no       | `''`    | Comma-separated `key=value` pairs |
 
 When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
 
@@ -171,13 +171,13 @@ Third-party GH Actions runners (Depot, Blacksmith, Namespace, BuildJet) get flag
 
 Install step, measured on Depot (`depot-ubuntu-24.04`), N=3 runs, variance ≤5s:
 
-| Strategy | Install step |
-|----------|--------------|
-| GH-hosted `ubuntu-24.04` + `setup-php` | ~6s (baseline) |
-| Depot `depot-ubuntu-24.04` + `setup-php` | ~83s |
+| Strategy                                      | Install step                 |
+| --------------------------------------------- | ---------------------------- |
+| GH-hosted `ubuntu-24.04` + `setup-php`        | ~6s (baseline)               |
+| Depot `depot-ubuntu-24.04` + `setup-php`      | ~83s                         |
 | Depot + `lorisleiva/laravel-docker` container | ~9s (+ ~35s cold image pull) |
-| Depot + `php.new` static | ~5s (8.5-only at the time) |
-| **Depot + `publicala/php-ci-static`** | **<1s** |
+| Depot + `php.new` static                      | ~5s (8.5-only at the time)   |
+| **Depot + `publicala/php-ci-static`**         | **<1s**                      |
 
 The slow path triggers whenever a runner reports `RUNNER_ENVIRONMENT=self-hosted`, which every third-party provider does even though their images mirror GitHub's own. Prior art, with the maintainer's rationale for not special-casing these runners: [`shivammathur/setup-php#1056`](https://github.com/shivammathur/setup-php/issues/1056).
 
@@ -218,9 +218,7 @@ sockets     sodium      sqlite3     tokenizer   xml
 xmlreader   xmlwriter   zip         zlib
 ```
 
-`mbstring` ships with oniguruma support enabled, so `mb_split`,
-`mb_ereg`, `mb_ereg_match`, and friends all work. Laravel's
-`Illuminate\Support\Str` depends on this.
+`mbstring` ships with oniguruma support enabled, so `mb_split`, `mb_ereg`, `mb_ereg_match`, and friends all work. Laravel's `Illuminate\Support\Str` depends on this.
 
 ### Shared (downloaded separately)
 
