@@ -102,6 +102,9 @@ mkdir -p "$bin_dir" "$conf_dir"
 install -m 0755 "$work/php-linux-x86_64" "$bin_dir/php"
 
 printf 'memory_limit=-1\n' > "$conf_dir/00-php-ci-static-defaults.ini"
+# Remove any custom ini a previous run wrote, so re-running without
+# --ini-values does not keep applying the old directives.
+rm -f "$conf_dir/99-php-ci-static-custom.ini"
 if [[ -n "$ini_values" ]]; then
   php_ci_static_render_ini_values "$ini_values" > "$conf_dir/99-php-ci-static-custom.ini"
 fi
