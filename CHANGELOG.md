@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.8.0
+
+- Add `scripts/install-php.bash`, a standalone installer for environments
+  outside GitHub Actions (dev containers, Forge, raw shell). It resolves
+  the channel pointer, downloads and checksum-verifies the binary, installs
+  it onto `PATH`, and renders optional `--ini-values` into the binary's
+  compiled-in ini scan dir (`/usr/local/etc/php/conf.d`), so directives
+  apply without `PHP_INI_SCAN_DIR` plumbing. Fetch it together with its
+  sibling `runtime-assets.bash` from the same ref.
+
+- Extract the channel-pointer resolution and the `ini-values`
+  parser/renderer from the composite action into shared functions in
+  `scripts/runtime-assets.bash` (`php_ci_static_resolve_release_base`,
+  `php_ci_static_render_ini_values`), used by both the action and the new
+  installer. The parser was previously duplicated inside `action.yml`.
+  Action behavior is unchanged; warnings and errors still surface as
+  workflow annotations inside Actions and print as plain text elsewhere.
+
 ## v1.7.0
 
 - Add a runtime asset cache to the root action. The action now resolves

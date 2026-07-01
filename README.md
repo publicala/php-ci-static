@@ -236,30 +236,21 @@ Three-tier strategy: static PHP for the common Laravel CI workload, [`lorisleiva
 
 ## Manual install (no GitHub Actions)
 
-For Forge, raw shell, or any non-Actions runner. Resolve the current release for your series from the `channels` pointer, then download and verify (the same recipe the action runs internally):
+For Forge, dev containers, raw shell, or any non-Actions runner, `scripts/install-php.bash` runs the same resolve-verify-install recipe the action runs internally: it resolves the current release for your series from the `channels` pointer, downloads and checksum-verifies the binary, installs it onto `PATH`, and renders optional ini directives into the binary's compiled-in scan dir (`/usr/local/etc/php/conf.d`), so they apply to every later `php` call without `PHP_INI_SCAN_DIR`.
 
 ```bash
-SERIES=8.4
-BASE=$(curl -fsSL "https://raw.githubusercontent.com/publicala/php-ci-static/channels/$SERIES")
-curl -fsSL -O "$BASE/SHA256SUMS"
-if command -v zstd >/dev/null && grep -q ' php-linux-x86_64.zst$' SHA256SUMS; then
-  curl -fsSL -O "$BASE/php-linux-x86_64.zst"
-  grep ' php-linux-x86_64.zst$' SHA256SUMS | sha256sum -c -
-  zstd -d -f php-linux-x86_64.zst -o php-linux-x86_64
-else
-  curl -fsSL -O "$BASE/php-linux-x86_64"
-fi
-grep ' php-linux-x86_64$' SHA256SUMS | sha256sum -c -
-chmod +x php-linux-x86_64
-sudo mv php-linux-x86_64 /usr/local/bin/php
+base=https://raw.githubusercontent.com/publicala/php-ci-static/v1/scripts
+curl -fsSL -O "$base/runtime-assets.bash"
+curl -fsSL -O "$base/install-php.bash"
+bash install-php.bash --php-version 8.4 --ini-values 'memory_limit=512M, opcache.enable_cli=1'
 php -v
 ```
 
-To pin an exact patch, skip the pointer and set `BASE` to a specific release, e.g. `https://github.com/publicala/php-ci-static/releases/download/php-8.4.21`.
+The script sources its sibling `runtime-assets.bash`, so fetch both files from the same ref (or run it from a checkout). `--bin-dir` (default `/usr/local/bin`) and `--conf-dir` (default `/usr/local/etc/php/conf.d`) relocate the install; writing to the defaults needs root. `ini-values` accepts the same syntax as the action input.
 
-Piping the matching line into `sha256sum -c` (rather than `sha256sum -c SHA256SUMS --ignore-missing`) guarantees the check actually ran. `--ignore-missing` would exit 0 even if nothing matched.
+The binary ships with the upstream `php.ini-*` `memory_limit=128M` default, tuned for shared-hosting web SAPIs and well under what PHPCS / PHPStan / PHPUnit need on a real Laravel codebase. Like the action, the script drops a baseline `memory_limit=-1` into the scan dir on every run; the file rendered from `--ini-values` sorts later, so your values win.
 
-The binary ships with the upstream `php.ini-*` `memory_limit=128M` default, tuned for shared-hosting web SAPIs and well under what PHPCS / PHPStan / PHPUnit need on a real Laravel codebase. The composite action handles this transparently. For raw shell, pass `php -d memory_limit=-1 ...` (or drop a `memory_limit=-1` ini into a directory and point `PHP_INI_SCAN_DIR` at it).
+To pin an exact patch instead of following the pointer, download from a specific release yourself, e.g. `https://github.com/publicala/php-ci-static/releases/download/php-8.4.21`, verifying against its `SHA256SUMS` (pipe the matching line into `sha256sum -c -`; `--ignore-missing` would exit 0 even if nothing matched).
 
 For coverage, download the `.so` and load it via `-d`:
 
