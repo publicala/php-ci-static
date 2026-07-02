@@ -36,6 +36,14 @@ assert_fails() {
   fi
 }
 
+assert_equals() {
+  local expected="$1"
+  local actual="$2"
+  local message="$3"
+
+  [[ "$actual" == "$expected" ]] || fail "$message (expected '$expected', got '$actual')"
+}
+
 make_case() {
   local name="$1"
 
@@ -159,11 +167,83 @@ test_runtime_cache_missing_checksum_returns_failure() {
     php_ci_static_runtime_cache_is_ready "$release/SHA256SUMS" "$dist"
 }
 
+test_render_ini_values_renders_one_line_per_directive() {
+  local out
+  out="$(php_ci_static_render_ini_values 'memory_limit=512M, opcache.enable_cli=1')"
+
+  assert_equals $'memory_limit=512M\nopcache.enable_cli=1' "$out" \
+    "comma-separated directives should render one per line"
+}
+
+test_render_ini_values_keeps_comma_values_intact() {
+  local out
+  out="$(php_ci_static_render_ini_values 'disable_functions=exec,passthru, memory_limit=512M')"
+  assert_equals $'disable_functions=exec,passthru\nmemory_limit=512M' "$out" \
+    "unquoted commas inside a value should not split the directive"
+
+  out="$(php_ci_static_render_ini_values 'disable_functions="exec,passthru"')"
+  assert_equals 'disable_functions=exec,passthru' "$out" \
+    "quoted commas inside a value should not split the directive"
+}
+
+test_render_ini_values_quotes_values_the_ini_lexer_would_mangle() {
+  local out
+  out="$(php_ci_static_render_ini_values "error_log='/tmp/foo=bar.log'")"
+
+  assert_equals 'error_log="/tmp/foo=bar.log"' "$out" \
+    "values containing = should be wrapped in double quotes"
+}
+
+test_render_ini_values_rejects_malformed_pair() {
+  assert_fails \
+    "a directive without = should be rejected" \
+    php_ci_static_render_ini_values 'memory_limit'
+}
+
+test_resolve_release_base_reads_channel_pointer() {
+  make_case pointer
+  printf 'https://github.com/publicala/php-ci-static/releases/download/php-8.3.99\n' > "$case_dir/8.3"
+
+  local out
+  out="$(PHP_CI_STATIC_POINTER_BASE="file://$case_dir" php_ci_static_resolve_release_base 8.3)"
+
+  assert_equals 'https://github.com/publicala/php-ci-static/releases/download/php-8.3.99' "$out" \
+    "resolver should return the release base the pointer names"
+}
+
+test_resolve_release_base_rejects_series_mismatch() {
+  make_case pointer-mismatch
+  printf 'https://github.com/publicala/php-ci-static/releases/download/php-8.3.99\n' > "$case_dir/8.4"
+
+  export PHP_CI_STATIC_POINTER_BASE="file://$case_dir"
+  assert_fails \
+    "a pointer naming a different PHP series should be rejected" \
+    php_ci_static_resolve_release_base 8.4
+  unset PHP_CI_STATIC_POINTER_BASE
+}
+
+test_resolve_release_base_falls_back_when_pointer_unreachable() {
+  make_case pointer-missing
+
+  local out
+  out="$(PHP_CI_STATIC_POINTER_BASE="file://$case_dir/missing" php_ci_static_resolve_release_base 8.3 2>/dev/null)"
+
+  assert_equals 'https://github.com/publicala/php-ci-static/releases/download/latest-8.3' "$out" \
+    "an unreachable pointer should fall back to the frozen latest release"
+}
+
 test_raw_download_path
 test_zstd_download_path
 test_corrupt_compressed_asset_fails
 test_missing_checksum_entry_fails_without_exiting
 test_runtime_cache_ready_verifies_every_asset
 test_runtime_cache_missing_checksum_returns_failure
+test_render_ini_values_renders_one_line_per_directive
+test_render_ini_values_keeps_comma_values_intact
+test_render_ini_values_quotes_values_the_ini_lexer_would_mangle
+test_render_ini_values_rejects_malformed_pair
+test_resolve_release_base_reads_channel_pointer
+test_resolve_release_base_rejects_series_mismatch
+test_resolve_release_base_falls_back_when_pointer_unreachable
 
 echo "runtime asset helper tests passed"
