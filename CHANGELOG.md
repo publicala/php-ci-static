@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.8.1
+
+- Keep PHP startup warnings out of the installed-version assert, in both the
+  composite action and `scripts/install-php.bash`. A startup warning could
+  land inside the `installed="$(php -r ...)"` command substitution and fail
+  the assert with `installed PHP 8.5 does not match requested php-version
+  8.5` — reachable by pairing `coverage: pcov` (or `xdebug`) with
+  `opcache.jit` in `ini-values`. The probes, and `install-php.bash`'s closing
+  `php -v | head -n1` line, now run through the new `php_ci_static_php_probe`
+  helper in `scripts/runtime-assets.bash`, which closes both routes PHP has
+  for putting a startup diagnostic on stdout while keeping it visible on
+  stderr (rationale documented on the helper).
+
+- Add the `ini-values-jit-with-coverage` job, pairing `coverage: pcov` with
+  JIT directives and with `error_log=/dev/stdout`, so both routes onto stdout
+  are covered by one regression job rather than closed one at a time.
+
 ## v1.8.0
 
 - Add `scripts/install-php.bash`, a standalone installer for environments

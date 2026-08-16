@@ -115,11 +115,16 @@ fi
 
 # Assert the installed binary is the requested series, regardless of how the
 # base resolved. Catches a mispointed channel or a wrong-series fallback
-# before the caller runs anything against the wrong PHP.
-installed="$("$bin_dir/php" -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+# before the caller runs anything against the wrong PHP. The probe helper
+# keeps startup warnings off stdout, where one would prefix the captured
+# version (reachable straight from this script's own --ini-values); rationale
+# on php_ci_static_php_probe in runtime-assets.bash.
+installed="$(php_ci_static_php_probe "$bin_dir/php" -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
 if [[ "$installed" != "$php_version" ]]; then
   php_ci_static_error "installed PHP ${installed} does not match requested --php-version ${php_version}"
   exit 1
 fi
 
-echo "Installed $("$bin_dir/php" -v | head -n1) at ${bin_dir}/php (ini scan dir: ${conf_dir})."
+# Same reason as above: a startup warning would otherwise take the `head -n1`
+# slot and report itself as the installed version.
+echo "Installed $(php_ci_static_php_probe "$bin_dir/php" -v | head -n1) at ${bin_dir}/php (ini scan dir: ${conf_dir})."

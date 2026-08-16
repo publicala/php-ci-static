@@ -211,8 +211,12 @@ runs:
 
         # Assert the installed binary is the requested series, regardless of how
         # BASE resolved. Catches a mispointed channel or a wrong-series fallback
-        # before any consumer step runs against the wrong PHP.
-        installed="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+        # before any consumer step runs against the wrong PHP. The probe helper
+        # keeps startup warnings (e.g. pcov disabling a requested JIT) off
+        # stdout, where one would land inside this command substitution and
+        # corrupt the comparison; rationale on php_ci_static_php_probe in
+        # runtime-assets.bash.
+        installed="$(php_ci_static_php_probe php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
         if [[ "$installed" != "$PHP_VERSION" ]]; then
           echo "::error::installed PHP ${installed} does not match requested php-version ${PHP_VERSION}"
           exit 1

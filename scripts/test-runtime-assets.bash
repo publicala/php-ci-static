@@ -232,6 +232,19 @@ test_resolve_release_base_falls_back_when_pointer_unreachable() {
     "an unreachable pointer should fall back to the frozen latest release"
 }
 
+test_php_probe_prepends_both_stdout_closing_flags() {
+  make_case php-probe
+  local stub="$case_dir/php-stub"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@"\n' > "$stub"
+  chmod +x "$stub"
+
+  local out
+  out="$(php_ci_static_php_probe "$stub" -r 'echo 1;')"
+
+  assert_equals $'-d\ndisplay_errors=stderr\n-d\nlog_errors=0\n-r\necho 1;' "$out" \
+    "probe should run the given binary with both stdout-closing flags before caller arguments"
+}
+
 test_raw_download_path
 test_zstd_download_path
 test_corrupt_compressed_asset_fails
@@ -245,5 +258,6 @@ test_render_ini_values_rejects_malformed_pair
 test_resolve_release_base_reads_channel_pointer
 test_resolve_release_base_rejects_series_mismatch
 test_resolve_release_base_falls_back_when_pointer_unreachable
+test_php_probe_prepends_both_stdout_closing_flags
 
 echo "runtime asset helper tests passed"
