@@ -213,17 +213,25 @@ runs:
         # BASE resolved. Catches a mispointed channel or a wrong-series fallback
         # before any consumer step runs against the wrong PHP.
         #
-        # display_errors=stderr is load-bearing, not tidiness. PHP CLI defaults
-        # display_errors to STDOUT, and startup diagnostics are ordinary
-        # E_WARNINGs, so any of them lands *inside* this command substitution
-        # and corrupts the comparison. The reachable case: `coverage: pcov`
-        # overrides zend_execute_ex, so requesting opcache.jit through
-        # ini-values makes PHP disable the JIT and warn while doing it. That
-        # warning prefixes the version and the assert then fails with the
-        # memorably useless "installed PHP 8.5 does not match requested
-        # php-version 8.5". Routing errors to stderr keeps them visible in the
-        # log while leaving stdout to the value being read.
-        installed="$(php -d display_errors=stderr -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+        # These two -d flags are load-bearing, not tidiness. Startup
+        # diagnostics are ordinary E_WARNINGs, and PHP can put them on stdout
+        # by two independent routes, so both have to be closed or the warning
+        # lands *inside* this command substitution and corrupts the comparison:
+        #
+        #   display_errors  defaults to STDOUT on CLI       -> pin to stderr
+        #   log_errors      writes a second copy to          -> switch off
+        #                   error_log, which a caller can
+        #                   point at /dev/stdout through
+        #                   ini-values
+        #
+        # The reachable trigger: `coverage: pcov` overrides zend_execute_ex, so
+        # requesting opcache.jit through ini-values makes PHP disable the JIT
+        # and warn while doing it. The warning prefixes the version and the
+        # assert then fails with the memorably useless "installed PHP 8.5 does
+        # not match requested php-version 8.5". Both flags are scoped to this
+        # one command, so the warning still reaches the workflow log on stderr
+        # and the caller's own directives are untouched.
+        installed="$(php -d display_errors=stderr -d log_errors=0 -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
         if [[ "$installed" != "$PHP_VERSION" ]]; then
           echo "::error::installed PHP ${installed} does not match requested php-version ${PHP_VERSION}"
           exit 1

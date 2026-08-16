@@ -3,15 +3,17 @@
 ## v1.8.1
 
 - Keep PHP startup warnings out of the installed-version assert, in both the
-  composite action and `scripts/install-php.bash`. PHP CLI defaults
-  `display_errors` to STDOUT and startup diagnostics are ordinary
-  `E_WARNING`s, so one landed inside the `installed="$(php -r ...)"` command
+  composite action and `scripts/install-php.bash`. Startup diagnostics are
+  ordinary `E_WARNING`s, and PHP has two independent routes for putting one on
+  stdout, so one landed inside the `installed="$(php -r ...)"` command
   substitution and left the assert comparing a warning-prefixed string against
-  the requested series. Both probes now run with `-d display_errors=stderr`,
-  which keeps the diagnostics visible in the log while leaving stdout to the
-  value being read. `install-php.bash`'s closing `php -v | head -n1` took the
-  same fix, where a warning could otherwise report itself as the installed
-  version.
+  the requested series. Both probes now run with `-d display_errors=stderr -d
+  log_errors=0`, closing both: `display_errors` defaults to STDOUT on CLI, and
+  `log_errors` writes a second copy to `error_log`, which a caller can point at
+  `/dev/stdout` through `ini-values`. The flags are scoped to those commands,
+  so diagnostics still reach the log on stderr and a caller's own directives
+  are untouched. `install-php.bash`'s closing `php -v | head -n1` took the same
+  fix, where a warning could otherwise report itself as the installed version.
 
   Reachable from documented inputs: `coverage: pcov` (or `xdebug`) overrides
   `zend_execute_ex`, so passing `opcache.jit` through `ini-values` makes PHP
@@ -21,9 +23,10 @@
   that warns at startup hit this the same way.
 
 - Add the `ini-values-jit-with-coverage` job, pairing `coverage: pcov` with
-  JIT directives to cover that combination. The existing `ini-values` job
-  cannot catch it: it requests opcache without ever asking for the JIT, so
-  nothing warns.
+  JIT directives and with `error_log=/dev/stdout`, so both routes onto stdout
+  are covered by one job rather than closed one at a time. The existing
+  `ini-values` job cannot catch this: it requests opcache without ever asking
+  for the JIT, so nothing warns.
 
 ## v1.8.0
 
