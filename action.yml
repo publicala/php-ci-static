@@ -212,7 +212,18 @@ runs:
         # Assert the installed binary is the requested series, regardless of how
         # BASE resolved. Catches a mispointed channel or a wrong-series fallback
         # before any consumer step runs against the wrong PHP.
-        installed="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+        #
+        # display_errors=stderr is load-bearing, not tidiness. PHP CLI defaults
+        # display_errors to STDOUT, and startup diagnostics are ordinary
+        # E_WARNINGs, so any of them lands *inside* this command substitution
+        # and corrupts the comparison. The reachable case: `coverage: pcov`
+        # overrides zend_execute_ex, so requesting opcache.jit through
+        # ini-values makes PHP disable the JIT and warn while doing it. That
+        # warning prefixes the version and the assert then fails with the
+        # memorably useless "installed PHP 8.5 does not match requested
+        # php-version 8.5". Routing errors to stderr keeps them visible in the
+        # log while leaving stdout to the value being read.
+        installed="$(php -d display_errors=stderr -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
         if [[ "$installed" != "$PHP_VERSION" ]]; then
           echo "::error::installed PHP ${installed} does not match requested php-version ${PHP_VERSION}"
           exit 1

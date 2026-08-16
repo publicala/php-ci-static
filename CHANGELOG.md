@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.8.1
+
+- Keep PHP startup warnings out of the installed-version assert, in both the
+  composite action and `scripts/install-php.bash`. PHP CLI defaults
+  `display_errors` to STDOUT and startup diagnostics are ordinary
+  `E_WARNING`s, so one landed inside the `installed="$(php -r ...)"` command
+  substitution and left the assert comparing a warning-prefixed string against
+  the requested series. Both probes now run with `-d display_errors=stderr`,
+  which keeps the diagnostics visible in the log while leaving stdout to the
+  value being read. `install-php.bash`'s closing `php -v | head -n1` took the
+  same fix, where a warning could otherwise report itself as the installed
+  version.
+
+  Reachable from documented inputs: `coverage: pcov` (or `xdebug`) overrides
+  `zend_execute_ex`, so passing `opcache.jit` through `ini-values` makes PHP
+  disable the JIT and warn while doing it. The action then failed with
+  `installed PHP 8.5 does not match requested php-version 8.5`, which reads as
+  a broken release channel rather than as a warning on stdout. Any extension
+  that warns at startup hit this the same way.
+
+- Add the `ini-values-jit-with-coverage` job, pairing `coverage: pcov` with
+  JIT directives to cover that combination. The existing `ini-values` job
+  cannot catch it: it requests opcache without ever asking for the JIT, so
+  nothing warns.
+
 ## v1.8.0
 
 - Add `scripts/install-php.bash`, a standalone installer for environments

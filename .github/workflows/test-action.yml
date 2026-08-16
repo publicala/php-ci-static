@@ -213,6 +213,55 @@ jobs:
           ls "$RUNNER_TEMP/php-ci-static/conf.d/coverage.ini"
           ls "$RUNNER_TEMP/php-ci-static/conf.d/custom.ini"
 
+  ini-values-jit-with-coverage:
+    name: ini-values requesting JIT composes with a coverage driver
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      # Regression cover. This exact combination used to fail the action's own
+      # version assert: pcov overrides zend_execute_ex, so PHP disables the JIT
+      # at startup and emits an E_WARNING saying so. PHP CLI sends
+      # display_errors to STDOUT, so that warning landed inside the
+      # `installed="$(php -r ...)"` command substitution and the assert failed
+      # with "installed PHP 8.4 does not match requested php-version 8.4". The
+      # `ini-values` job above cannot catch it: it requests opcache without
+      # ever asking for the JIT, so nothing warns.
+      - uses: ./
+        with:
+          php-version: '8.4'
+          coverage: pcov
+          ini-values: memory_limit=512M, opcache.enable_cli=1, opcache.jit=tracing, opcache.jit_buffer_size=64M
+
+      - name: Probe
+        run: |
+          set -euo pipefail
+
+          # Reaching this step at all is most of the assertion: with a polluted
+          # probe the action fails before ever yielding to us.
+          php -v | grep -F "PHP 8.4."
+          php -r 'exit(extension_loaded("pcov") ? 0 : 1);'
+
+          # The directives still applied, even though pcov's presence means PHP
+          # disables the JIT itself. That is the documented PHP behavior and it
+          # is what this job asserts we tolerate, not something we work around.
+          [[ "$(php -d display_errors=stderr -r 'echo ini_get("memory_limit");')" == "512M" ]] \
+            || { echo "::error::memory_limit not 512M"; exit 1; }
+
+          # Assert the warning is genuinely emitted, so this job keeps guarding
+          # the probe rather than silently becoming a no-op if PHP or pcov stop
+          # producing it. A miss is a warning, not a failure: the contract under
+          # test is the probe surviving startup noise, not PHP's exact wording.
+          startup="$(php -r 'echo "";' 2>&1 >/dev/null || true)"
+          case "$startup" in
+            *zend_execute_ex*)
+              echo "JIT-disabled startup warning present, as expected."
+              ;;
+            *)
+              echo "::warning::expected a JIT/zend_execute_ex startup warning and saw none. If PHP or pcov changed, re-point this job at another startup-warning source or it stops covering the probe."
+              ;;
+          esac
+
   ini-values-preserves-commas-in-values:
     name: ini-values preserves commas inside values
     runs-on: depot-ubuntu-24.04
@@ -618,6 +667,7 @@ jobs:
       - matrix
       - runtime-cache-reuse
       - ini-values
+      - ini-values-jit-with-coverage
       - ini-values-preserves-commas-in-values
       - ini-values-supports-quoted-values
       - ini-values-preserves-literal-quote-chars

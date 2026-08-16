@@ -116,10 +116,20 @@ fi
 # Assert the installed binary is the requested series, regardless of how the
 # base resolved. Catches a mispointed channel or a wrong-series fallback
 # before the caller runs anything against the wrong PHP.
-installed="$("$bin_dir/php" -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+#
+# display_errors=stderr keeps startup diagnostics out of the captured value.
+# PHP CLI defaults display_errors to STDOUT and startup diagnostics are
+# ordinary E_WARNINGs, so one would otherwise prefix the version and fail this
+# assert with "installed PHP X.Y does not match requested --php-version X.Y".
+# Reachable straight from this script's own --ini-values: request opcache.jit
+# while an extension that overrides zend_execute_ex is loaded and PHP disables
+# the JIT and warns. Errors still reach the terminal, just on stderr.
+installed="$("$bin_dir/php" -d display_errors=stderr -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
 if [[ "$installed" != "$php_version" ]]; then
   php_ci_static_error "installed PHP ${installed} does not match requested --php-version ${php_version}"
   exit 1
 fi
 
-echo "Installed $("$bin_dir/php" -v | head -n1) at ${bin_dir}/php (ini scan dir: ${conf_dir})."
+# Same reason as above: a startup warning would otherwise take the `head -n1`
+# slot and report itself as the installed version.
+echo "Installed $("$bin_dir/php" -d display_errors=stderr -v | head -n1) at ${bin_dir}/php (ini scan dir: ${conf_dir})."
