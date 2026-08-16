@@ -252,7 +252,13 @@ jobs:
           # the probe rather than silently becoming a no-op if PHP or pcov stop
           # producing it. A miss is a warning, not a failure: the contract under
           # test is the probe surviving startup noise, not PHP's exact wording.
-          startup="$(php -r 'echo "";' 2>&1 >/dev/null || true)"
+          #
+          # Read STDOUT, discarding stderr. That looks backwards for a warning
+          # and is the entire point of this job: PHP CLI sends display_errors to
+          # STDOUT, which is why the startup warning could reach a command
+          # substitution meant to capture a version. Capturing stderr here finds
+          # nothing and reports a false all-clear.
+          startup="$(php -r 'echo "";' 2>/dev/null || true)"
           case "$startup" in
             *zend_execute_ex*)
               echo "JIT-disabled startup warning present, as expected."
