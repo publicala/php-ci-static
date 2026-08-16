@@ -18,6 +18,25 @@ php_ci_static_error() {
   fi
 }
 
+# Run a PHP binary for a captured probe (`$(...)`), keeping startup
+# diagnostics off stdout so the substitution reads the value alone. Startup
+# diagnostics are ordinary E_WARNINGs, and PHP has two independent routes for
+# putting one on stdout, both of which have to be closed or the warning lands
+# inside the captured value: display_errors defaults to STDOUT on CLI (pinned
+# to stderr), and log_errors writes a second copy to error_log, which
+# ini-values can point at /dev/stdout (switched off). The reachable trigger:
+# a coverage extension overrides zend_execute_ex, so requesting opcache.jit
+# through ini-values makes PHP disable the JIT and warn while doing it. The
+# flags are scoped to the one invocation, so the diagnostics still reach the
+# log on stderr and the caller's own directives are untouched. First argument
+# is the php binary (callers probe before PATH picks it up), the rest are
+# passed through.
+php_ci_static_php_probe() {
+  local php_bin="$1"
+  shift
+  "$php_bin" -d display_errors=stderr -d log_errors=0 "$@"
+}
+
 # Resolve the current immutable release for a PHP series from the channel
 # pointer. The organization enforces immutable releases, so binaries ship as
 # one release per patch (php-X.Y.Z) and the pointer names the newest. Falls

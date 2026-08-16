@@ -3,30 +3,19 @@
 ## v1.8.1
 
 - Keep PHP startup warnings out of the installed-version assert, in both the
-  composite action and `scripts/install-php.bash`. Startup diagnostics are
-  ordinary `E_WARNING`s, and PHP has two independent routes for putting one on
-  stdout, so one landed inside the `installed="$(php -r ...)"` command
-  substitution and left the assert comparing a warning-prefixed string against
-  the requested series. Both probes now run with `-d display_errors=stderr -d
-  log_errors=0`, closing both: `display_errors` defaults to STDOUT on CLI, and
-  `log_errors` writes a second copy to `error_log`, which a caller can point at
-  `/dev/stdout` through `ini-values`. The flags are scoped to those commands,
-  so diagnostics still reach the log on stderr and a caller's own directives
-  are untouched. `install-php.bash`'s closing `php -v | head -n1` took the same
-  fix, where a warning could otherwise report itself as the installed version.
-
-  Reachable from documented inputs: `coverage: pcov` (or `xdebug`) overrides
-  `zend_execute_ex`, so passing `opcache.jit` through `ini-values` makes PHP
-  disable the JIT and warn while doing it. The action then failed with
-  `installed PHP 8.5 does not match requested php-version 8.5`, which reads as
-  a broken release channel rather than as a warning on stdout. Any extension
-  that warns at startup hit this the same way.
+  composite action and `scripts/install-php.bash`. A startup warning could
+  land inside the `installed="$(php -r ...)"` command substitution and fail
+  the assert with `installed PHP 8.5 does not match requested php-version
+  8.5` — reachable by pairing `coverage: pcov` (or `xdebug`) with
+  `opcache.jit` in `ini-values`. The probes, and `install-php.bash`'s closing
+  `php -v | head -n1` line, now run through the new `php_ci_static_php_probe`
+  helper in `scripts/runtime-assets.bash`, which closes both routes PHP has
+  for putting a startup diagnostic on stdout while keeping it visible on
+  stderr (rationale documented on the helper).
 
 - Add the `ini-values-jit-with-coverage` job, pairing `coverage: pcov` with
   JIT directives and with `error_log=/dev/stdout`, so both routes onto stdout
-  are covered by one job rather than closed one at a time. The existing
-  `ini-values` job cannot catch this: it requests opcache without ever asking
-  for the JIT, so nothing warns.
+  are covered by one regression job rather than closed one at a time.
 
 ## v1.8.0
 

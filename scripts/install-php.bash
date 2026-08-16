@@ -115,25 +115,16 @@ fi
 
 # Assert the installed binary is the requested series, regardless of how the
 # base resolved. Catches a mispointed channel or a wrong-series fallback
-# before the caller runs anything against the wrong PHP.
-#
-# Both -d flags keep startup diagnostics out of the captured value. Startup
-# diagnostics are ordinary E_WARNINGs, and PHP can route them to stdout two
-# independent ways: display_errors defaults to STDOUT on CLI, and log_errors
-# writes a second copy to error_log, which --ini-values can point at
-# /dev/stdout. Either one prefixes the version and fails this assert with
-# "installed PHP X.Y does not match requested --php-version X.Y".
-#
-# Reachable straight from this script's own --ini-values: request opcache.jit
-# while an extension that overrides zend_execute_ex is loaded and PHP disables
-# the JIT and warns. Scoped to this command, so the diagnostics still reach the
-# terminal on stderr and the caller's directives are untouched.
-installed="$("$bin_dir/php" -d display_errors=stderr -d log_errors=0 -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+# before the caller runs anything against the wrong PHP. The probe helper
+# keeps startup warnings off stdout, where one would prefix the captured
+# version (reachable straight from this script's own --ini-values); rationale
+# on php_ci_static_php_probe in runtime-assets.bash.
+installed="$(php_ci_static_php_probe "$bin_dir/php" -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
 if [[ "$installed" != "$php_version" ]]; then
   php_ci_static_error "installed PHP ${installed} does not match requested --php-version ${php_version}"
   exit 1
 fi
 
-# Same reason as above: a startup warning on either route would otherwise take
-# the `head -n1` slot and report itself as the installed version.
-echo "Installed $("$bin_dir/php" -d display_errors=stderr -d log_errors=0 -v | head -n1) at ${bin_dir}/php (ini scan dir: ${conf_dir})."
+# Same reason as above: a startup warning would otherwise take the `head -n1`
+# slot and report itself as the installed version.
+echo "Installed $(php_ci_static_php_probe "$bin_dir/php" -v | head -n1) at ${bin_dir}/php (ini scan dir: ${conf_dir})."
