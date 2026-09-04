@@ -1,7 +1,7 @@
 name: 'publicala/php-ci-static'
 description: >-
-  Install a pre-built static PHP CLI from publicala/php-ci-static,
-  with optional pcov or xdebug auto-loaded via PHP_INI_SCAN_DIR.
+  Install a pre-built static PHP CLI from publicala/php-ci-static, validate a
+  container-provided PHP runtime, or install PHP through Homebrew on macOS.
 author: 'publicala'
 branding:
   icon: 'cpu'
@@ -9,8 +9,12 @@ branding:
 
 inputs:
   php-version:
-    description: 'PHP series: 8.3, 8.4, or 8.5'
+    description: 'PHP series. Static: 8.3, 8.4, or 8.5. System: 7.4 or 8.1 through 8.5. Homebrew: 8.1 through 8.5.'
     required: true
+  runtime:
+    description: 'Runtime source: static, system, or homebrew'
+    required: false
+    default: 'static'
   coverage:
     description: 'Coverage driver: none, pcov, or xdebug'
     required: false
@@ -23,23 +27,32 @@ inputs:
 outputs:
   runtime-cache-hit:
     description: The string "true" when the PHP runtime cache was an exact match.
-    value: ${{ steps.runtime-cache.outputs.cache-hit }}
+    value: ${{ steps.runtime-cache.outputs.cache-hit || 'false' }}
 
 runs:
   using: 'composite'
   steps:
     - name: Validate inputs
+      id: strategy
       shell: bash
       env:
         PHP_VERSION: ${{ inputs.php-version }}
+        RUNTIME: ${{ inputs.runtime }}
         COVERAGE: ${{ inputs.coverage }}
         INI_VALUES: ${{ inputs.ini-values }}
       run: |
         set -euo pipefail
         case "$PHP_VERSION" in
-          8.3|8.4|8.5) ;;
+          7.4|8.1|8.2|8.3|8.4|8.5) ;;
           *)
-            echo "::error::php-version must be one of 8.3, 8.4, 8.5 (got '$PHP_VERSION')"
+            echo "::error::php-version must be one of 7.4, 8.1, 8.2, 8.3, 8.4, 8.5 (got '$PHP_VERSION')"
+            exit 1
+            ;;
+        esac
+        case "$RUNTIME" in
+          static|system|homebrew) ;;
+          *)
+            echo "::error::runtime must be one of static, system, homebrew (got '$RUNTIME')"
             exit 1
             ;;
         esac
@@ -50,10 +63,48 @@ runs:
             exit 1
             ;;
         esac
-        if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
-          echo "::error::publicala/php-ci-static only ships Linux x86_64 binaries (got $(uname -s)/$(uname -m))"
-          exit 1
-        fi
+        case "$RUNTIME" in
+          static)
+            case "$PHP_VERSION" in
+              8.3|8.4|8.5) ;;
+              *)
+                echo "::error::runtime=static supports php-version 8.3, 8.4, or 8.5 (got '$PHP_VERSION')"
+                exit 1
+                ;;
+            esac
+            if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
+              echo "::error::runtime=static requires Linux/x86_64 (got $(uname -s)/$(uname -m))"
+              exit 1
+            fi
+            ;;
+          system)
+            if [[ "$COVERAGE" != "none" || -n "$INI_VALUES" ]]; then
+              echo "::error::runtime=system supports coverage=none and empty ini-values only"
+              exit 1
+            fi
+            ;;
+          homebrew)
+            case "$PHP_VERSION" in
+              8.1|8.2|8.3|8.4|8.5) ;;
+              *)
+                echo "::error::runtime=homebrew supports php-version 8.1 through 8.5 (got '$PHP_VERSION')"
+                exit 1
+                ;;
+            esac
+            if [[ "$(uname -s)" != "Darwin" ]]; then
+              echo "::error::runtime=homebrew requires macOS (got $(uname -s))"
+              exit 1
+            fi
+            if ! command -v brew >/dev/null 2>&1; then
+              echo "::error::runtime=homebrew requires Homebrew"
+              exit 1
+            fi
+            if [[ "$COVERAGE" != "none" || -n "$INI_VALUES" ]]; then
+              echo "::error::runtime=homebrew supports coverage=none and empty ini-values only"
+              exit 1
+            fi
+            ;;
+        esac
         if [[ -n "$INI_VALUES" ]]; then
           # Shape-check only; the install step renders the same input into
           # the scan dir. Parser details live with the shared function.
@@ -61,9 +112,11 @@ runs:
           source "$GITHUB_ACTION_PATH/scripts/runtime-assets.bash"
           php_ci_static_render_ini_values "$INI_VALUES" >/dev/null
         fi
+        echo "runtime=$RUNTIME" >> "$GITHUB_OUTPUT"
 
     - name: Resolve release
       id: release
+      if: steps.strategy.outputs.runtime == 'static'
       shell: bash
       env:
         PHP_VERSION: ${{ inputs.php-version }}
@@ -99,6 +152,7 @@ runs:
 
     - name: Restore runtime cache
       id: runtime-cache
+      if: steps.strategy.outputs.runtime == 'static'
       uses: actions/cache/restore@v5
       continue-on-error: true
       with:
@@ -106,13 +160,14 @@ runs:
         key: ${{ steps.release.outputs.cache-key }}
 
     - name: Report runtime cache restore failure
-      if: steps.runtime-cache.outcome == 'failure'
+      if: steps.strategy.outputs.runtime == 'static' && steps.runtime-cache.outcome == 'failure'
       shell: bash
       run: |
         echo "::warning::PHP runtime cache restore failed. Continuing with release asset downloads."
 
     - name: Install static PHP
       id: install
+      if: steps.strategy.outputs.runtime == 'static'
       shell: bash
       env:
         PHP_VERSION: ${{ inputs.php-version }}
@@ -237,9 +292,99 @@ runs:
 
         echo "cache-ready=true" >> "$GITHUB_OUTPUT"
 
+    - name: Use system PHP
+      if: steps.strategy.outputs.runtime == 'system'
+      shell: bash
+      env:
+        PHP_VERSION: ${{ inputs.php-version }}
+      run: |
+        set -euo pipefail
+
+        if ! command -v php >/dev/null 2>&1; then
+          echo "::error::runtime=system requires php on PATH"
+          exit 1
+        fi
+
+        installed="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+        if [[ "$installed" != "$PHP_VERSION" ]]; then
+          echo "::error::system PHP ${installed} does not match requested php-version ${PHP_VERSION}"
+          exit 1
+        fi
+
+        BIN="$RUNNER_TEMP/php-ci-static/bin"
+        rm -rf "$BIN"
+        mkdir -p "$BIN"
+        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
+          -o "$BIN/composer" https://getcomposer.org/composer-stable.phar
+        chmod +x "$BIN/composer"
+        echo "$BIN" >> "$GITHUB_PATH"
+        export PATH="$BIN:$PATH"
+
+        echo "::group::php -v"
+        php -v
+        echo "::endgroup::"
+        echo "::group::php -m"
+        php -m
+        echo "::endgroup::"
+        echo "::group::php --ini"
+        php --ini
+        echo "::endgroup::"
+        echo "::group::composer --version"
+        composer --version
+        echo "::endgroup::"
+
+    - name: Install Homebrew PHP
+      if: steps.strategy.outputs.runtime == 'homebrew'
+      shell: bash
+      env:
+        PHP_VERSION: ${{ inputs.php-version }}
+        HOMEBREW_NO_AUTO_UPDATE: '1'
+      run: |
+        set -euo pipefail
+
+        if [[ "$PHP_VERSION" == "8.5" ]]; then
+          formula="php"
+        else
+          formula="php@${PHP_VERSION}"
+        fi
+
+        if ! brew list --versions "$formula" >/dev/null 2>&1; then
+          brew install "$formula"
+        fi
+
+        php_bin="$(brew --prefix "$formula")/bin"
+        installed="$("$php_bin/php" -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')"
+        if [[ "$installed" != "$PHP_VERSION" ]]; then
+          echo "::error::Homebrew PHP ${installed} does not match requested php-version ${PHP_VERSION}"
+          exit 1
+        fi
+
+        BIN="$RUNNER_TEMP/php-ci-static/bin"
+        rm -rf "$BIN"
+        mkdir -p "$BIN"
+        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
+          -o "$BIN/composer" https://getcomposer.org/composer-stable.phar
+        chmod +x "$BIN/composer"
+        echo "$php_bin" >> "$GITHUB_PATH"
+        echo "$BIN" >> "$GITHUB_PATH"
+        export PATH="$BIN:$php_bin:$PATH"
+
+        echo "::group::php -v"
+        php -v
+        echo "::endgroup::"
+        echo "::group::php -m"
+        php -m
+        echo "::endgroup::"
+        echo "::group::php --ini"
+        php --ini
+        echo "::endgroup::"
+        echo "::group::composer --version"
+        composer --version
+        echo "::endgroup::"
+
     - name: Save runtime cache
       id: save-runtime-cache
-      if: steps.runtime-cache.outputs.cache-hit != 'true' && steps.install.outputs.cache-ready == 'true'
+      if: steps.strategy.outputs.runtime == 'static' && steps.runtime-cache.outputs.cache-hit != 'true' && steps.install.outputs.cache-ready == 'true'
       uses: actions/cache/save@v5
       continue-on-error: true
       with:
@@ -247,7 +392,7 @@ runs:
         key: ${{ steps.release.outputs.cache-key }}
 
     - name: Report runtime cache save failure
-      if: steps.save-runtime-cache.outcome == 'failure'
+      if: steps.strategy.outputs.runtime == 'static' && steps.save-runtime-cache.outcome == 'failure'
       shell: bash
       run: |
         echo "::warning::PHP runtime cache save failed. Future jobs may need to download release assets again."

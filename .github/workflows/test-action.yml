@@ -95,6 +95,113 @@ jobs:
 
       - run: npm test
 
+  system-runtime:
+    name: System PHP 7.4 container
+    runs-on: ubuntu-24.04
+    container:
+      image: php:7.4.33-cli-bullseye@sha256:620a6b9f4d4feef2210026172570465e9d0c1de79766418d3affd09190a7fda5
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        uses: ./
+        with:
+          php-version: '7.4'
+          runtime: system
+
+      - name: Probe
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.setup.outputs.runtime-cache-hit }}
+        run: |
+          set -euo pipefail
+          php -v | grep -F 'PHP 7.4.'
+          composer --version | grep -F 'Composer version'
+          [[ "$CACHE_HIT" == 'false' ]] \
+            || { echo "::error::system runtime reported cache hit: $CACHE_HIT"; exit 1; }
+
+  homebrew-runtime:
+    name: Homebrew PHP 8.5 on macOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        uses: ./
+        with:
+          php-version: '8.5'
+          runtime: homebrew
+
+      - name: Probe
+        env:
+          CACHE_HIT: ${{ steps.setup.outputs.runtime-cache-hit }}
+        run: |
+          set -euo pipefail
+          php -v | grep -F 'PHP 8.5.'
+          composer --version | grep -F 'Composer version'
+          [[ "$CACHE_HIT" == 'false' ]] \
+            || { echo "::error::Homebrew runtime reported cache hit: $CACHE_HIT"; exit 1; }
+
+  managed-runtime-validation:
+    name: Managed runtime validation
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Reject a system PHP version mismatch
+        id: wrong-system-version
+        # pla-stack:allow-continue-on-error negative test. The final step asserts this failure.
+        continue-on-error: true
+        uses: ./
+        with:
+          php-version: '7.4'
+          runtime: system
+
+      - name: Reject coverage for a system runtime
+        id: system-coverage
+        # pla-stack:allow-continue-on-error negative test. The final step asserts this failure.
+        continue-on-error: true
+        uses: ./
+        with:
+          php-version: '8.4'
+          runtime: system
+          coverage: pcov
+
+      - name: Reject Homebrew on Linux
+        id: homebrew-linux
+        # pla-stack:allow-continue-on-error negative test. The final step asserts this failure.
+        continue-on-error: true
+        uses: ./
+        with:
+          php-version: '8.5'
+          runtime: homebrew
+
+      - name: Reject an unknown runtime
+        id: unknown-runtime
+        # pla-stack:allow-continue-on-error negative test. The final step asserts this failure.
+        continue-on-error: true
+        uses: ./
+        with:
+          php-version: '8.4'
+          runtime: unknown
+
+      - name: Assert all invalid configurations failed
+        env:
+          WRONG_SYSTEM_VERSION: ${{ steps.wrong-system-version.outcome }}
+          SYSTEM_COVERAGE: ${{ steps.system-coverage.outcome }}
+          HOMEBREW_LINUX: ${{ steps.homebrew-linux.outcome }}
+          UNKNOWN_RUNTIME: ${{ steps.unknown-runtime.outcome }}
+        run: |
+          set -euo pipefail
+          for outcome in \
+            "$WRONG_SYSTEM_VERSION" \
+            "$SYSTEM_COVERAGE" \
+            "$HOMEBREW_LINUX" \
+            "$UNKNOWN_RUNTIME"; do
+            [[ "$outcome" == 'failure' ]] \
+              || { echo "::error::expected failure, got $outcome"; exit 1; }
+          done
+
   matrix:
     name: PHP ${{ matrix.php }} / coverage=${{ matrix.cov }}
     runs-on: depot-ubuntu-24.04
@@ -667,6 +774,9 @@ jobs:
     if: ${{ !cancelled() }}
     needs:
       - lint-tooling
+      - system-runtime
+      - homebrew-runtime
+      - managed-runtime-validation
       - matrix
       - runtime-cache-reuse
       - ini-values
