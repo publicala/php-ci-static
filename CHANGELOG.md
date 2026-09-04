@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.9.0
+
+- Add the `runtime` input. The default `static` source keeps the existing
+  Linux x86_64 behavior for PHP 8.3, 8.4, and 8.5.
+
+- Add `runtime: system` for compatibility jobs that use an official PHP
+  container. The action validates that PHP on `PATH` matches the requested
+  series and installs Composer. It supports PHP 7.4 and PHP 8.1 through 8.5.
+
+- Add `runtime: homebrew` for native macOS jobs. The action installs the
+  matching Homebrew PHP formula and Composer. It supports PHP 8.1 through
+  8.5.
+
+- Keep coverage modules and custom `ini-values` exclusive to the static
+  source. The managed sources fail early if either unsupported option is
+  requested.
+
 ## v1.8.1
 
 - Keep PHP startup warnings out of the installed-version assert, in both the

@@ -55,6 +55,22 @@ make_case() {
   mkdir -p "$release" "$dist" "$work"
 }
 
+(
+  brew() {
+    [[ "$*" == 'info php@8.5' ]]
+  }
+  assert_equals 'php@8.5' "$(php_ci_static_homebrew_formula 8.5)" \
+    'Prefer the versioned Homebrew formula when available'
+)
+
+(
+  brew() {
+    return 1
+  }
+  assert_equals 'php' "$(php_ci_static_homebrew_formula 8.5)" \
+    'Use the default Homebrew formula when the versioned formula is absent'
+)
+
 write_runtime_assets() {
   printf 'php binary fixture\n' > "$release/php-linux-x86_64"
   printf 'pcov fixture\n' > "$release/pcov-linux-x86_64.so"

@@ -1,5 +1,42 @@
 #!/usr/bin/env bash
 
+php_ci_static_homebrew_formula() {
+  local php_version="$1"
+
+  if brew info "php@${php_version}" >/dev/null 2>&1; then
+    echo "php@${php_version}"
+    return
+  fi
+
+  echo php
+}
+
+php_ci_static_install_composer() {
+  local bin="$1"
+
+  mkdir -p "$bin"
+  curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
+    -o "$bin/composer" https://getcomposer.org/composer-stable.phar
+  chmod +x "$bin/composer"
+  echo "$bin" >> "$GITHUB_PATH"
+  export PATH="$bin:$PATH"
+}
+
+php_ci_static_diagnostics() {
+  echo "::group::php -v"
+  php -v
+  echo "::endgroup::"
+  echo "::group::php -m"
+  php -m
+  echo "::endgroup::"
+  echo "::group::php --ini"
+  php --ini
+  echo "::endgroup::"
+  echo "::group::composer --version"
+  composer --version
+  echo "::endgroup::"
+}
+
 # Emit as GitHub workflow annotations inside Actions, plain text elsewhere,
 # so the same helpers serve the composite action and install-php.bash.
 php_ci_static_warn() {

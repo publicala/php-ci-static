@@ -1,6 +1,6 @@
 # php-ci-static
 
-Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/crazywhalecc/static-php-cli), tuned to cover what Laravel apps actually need, and shipped behind a composite GitHub Action so consumers install PHP with one `uses:` step.
+PHP runtime setup for PLA CI. The default installs a pre-built static PHP CLI from a verified Publica.la release. Controlled fallbacks validate PHP from an official container or install PHP from Homebrew on a native macOS job. Consumers use one internal `uses:` step in all three cases.
 
 ## Quick start
 
@@ -12,6 +12,41 @@ Static PHP binaries for PLA CI. Built with [static-php-cli](https://github.com/c
 ```
 
 That's it. The action resolves the current `8.4` binary release, restores the verified runtime assets from GitHub's cache when available, puts both `php` and `composer` on `PATH`, and (if `coverage` is set) auto-loads the coverage driver via `PHP_INI_SCAN_DIR` so subsequent `php` calls see it automatically.
+
+## Runtime sources
+
+`runtime: static` is the default. It supports PHP 8.3, 8.4, and 8.5 on Linux x86_64. Use it for normal CI jobs.
+
+`runtime: system` validates a PHP runtime that is already on `PATH` and installs Composer. Its main use is an official PHP container for compatibility checks that need an older PHP series:
+
+```yaml
+jobs:
+  php-compatibility:
+    runs-on: ubuntu-24.04
+    container: php:7.4-cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: publicala/php-ci-static@v1
+        with:
+          php-version: '7.4'
+          runtime: system
+```
+
+`runtime: homebrew` installs the requested Homebrew PHP formula and Composer on a native macOS job. Use it when the job must produce or test a macOS artifact:
+
+```yaml
+jobs:
+  macos-build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: publicala/php-ci-static@v1
+        with:
+          php-version: '8.5'
+          runtime: homebrew
+```
+
+The `system` and `homebrew` sources support `coverage: none` and no custom `ini-values`. The static source remains the only source that manages coverage modules and PHP configuration.
 
 ## Development
 
@@ -25,11 +60,12 @@ npm run hooks:install
 
 ## Inputs
 
-| Input         | Required | Default | Accepted values                   |
-| ------------- | -------- | ------- | --------------------------------- |
-| `php-version` | yes      | n/a     | `8.3`, `8.4`, `8.5`               |
-| `coverage`    | no       | `none`  | `none`, `pcov`, `xdebug`          |
-| `ini-values`  | no       | `''`    | Comma-separated `key=value` pairs |
+| Input | Required | Default | Accepted values |
+| --- | --- | --- | --- |
+| `php-version` | yes | n/a | Static: `8.3`, `8.4`, `8.5`. System: `7.4`, `8.1` through `8.5`. Homebrew: `8.1` through `8.5` |
+| `runtime` | no | `static` | `static`, `system`, `homebrew` |
+| `coverage` | no | `none` | `none`, `pcov`, `xdebug` |
+| `ini-values` | no | `''` | Comma-separated `key=value` pairs |
 
 When `coverage: xdebug`, the action sets `xdebug.mode=coverage` (mirroring `shivammathur/setup-php`). Override inline with `php -d xdebug.mode=...` for step-debugging or other modes.
 
@@ -163,7 +199,7 @@ Outputs: `cache-hit` (true on exact match) and `cache-key` (`composer-<runner.os
 
 The composite is read-only by design. It does not run `composer install` and does not save the cache. Both are decisions the caller's seed job owns, because install policy (skip-on-cache-hit, always-install, `--prefer-dist`, etc.) and save policy (always, only on miss) vary too much to fold into a default.
 
-Scope: same as the root action. Linux x86_64, PHP 8.3/8.4/8.5. For monorepo / non-root composer setups, point `dependency-path` at the right files.
+Scope: same as the root action's static source. Linux x86_64 with PHP 8.3, 8.4, or 8.5. For monorepo or non-root Composer setups, point `dependency-path` at the right files.
 
 ## Why
 
@@ -282,6 +318,6 @@ Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`, triggered by `workflow_dis
 
 ## Scope
 
-Linux x86_64 only. PHP 8.3, 8.4, 8.5. NTS (single-threaded). JIT enabled. Stripped binary.
+The default static source supports Linux x86_64 with PHP 8.3, 8.4, or 8.5. It uses NTS, enables JIT, and strips the binary. The system source supports PHP 7.4 or 8.1 through 8.5 when the exact requested series is already on `PATH`. The Homebrew source supports PHP 8.1 through 8.5 on macOS.
 
 All extensions are linked statically into the binary. Only libc is dynamic (glibc). Every Ubuntu / Debian / Depot CI runner ships glibc, so the binary works out of the box. The dynamic libc is what allows `xdebug.so` and `pcov.so` to load via `zend_extension`. musl-static binaries cannot dlopen shared modules.
