@@ -221,14 +221,7 @@ runs:
 
         cp "$DIST/php-linux-x86_64" "$BIN/php"
         chmod +x "$BIN/php"
-        echo "$BIN" >> "$GITHUB_PATH"
-
-        # composer-stable.phar is a rolling release (no fixed hash to pin
-        # against), so we lean on HTTPS to getcomposer.org plus curl's
-        # retry policy.
-        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
-          -o "$BIN/composer" https://getcomposer.org/composer-stable.phar
-        chmod +x "$BIN/composer"
+        php_ci_static_install_composer "$BIN"
 
         if [[ "$COVERAGE" != "none" ]]; then
           asset="${COVERAGE}-linux-x86_64.so"
@@ -277,18 +270,7 @@ runs:
           exit 1
         fi
 
-        echo "::group::php -v"
-        php -v
-        echo "::endgroup::"
-        echo "::group::php -m"
-        php -m
-        echo "::endgroup::"
-        echo "::group::php --ini"
-        php --ini
-        echo "::endgroup::"
-        echo "::group::composer --version"
-        composer --version
-        echo "::endgroup::"
+        php_ci_static_diagnostics
 
         echo "cache-ready=true" >> "$GITHUB_OUTPUT"
 
@@ -313,25 +295,11 @@ runs:
 
         BIN="$RUNNER_TEMP/php-ci-static/bin"
         rm -rf "$BIN"
-        mkdir -p "$BIN"
-        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
-          -o "$BIN/composer" https://getcomposer.org/composer-stable.phar
-        chmod +x "$BIN/composer"
-        echo "$BIN" >> "$GITHUB_PATH"
-        export PATH="$BIN:$PATH"
+        # shellcheck disable=SC1090,SC1091
+        source "$GITHUB_ACTION_PATH/scripts/runtime-assets.bash"
+        php_ci_static_install_composer "$BIN"
 
-        echo "::group::php -v"
-        php -v
-        echo "::endgroup::"
-        echo "::group::php -m"
-        php -m
-        echo "::endgroup::"
-        echo "::group::php --ini"
-        php --ini
-        echo "::endgroup::"
-        echo "::group::composer --version"
-        composer --version
-        echo "::endgroup::"
+        php_ci_static_diagnostics
 
     - name: Install Homebrew PHP
       if: steps.strategy.outputs.runtime == 'homebrew'
@@ -342,11 +310,9 @@ runs:
       run: |
         set -euo pipefail
 
-        if [[ "$PHP_VERSION" == "8.5" ]]; then
-          formula="php"
-        else
-          formula="php@${PHP_VERSION}"
-        fi
+        # shellcheck disable=SC1090,SC1091
+        source "$GITHUB_ACTION_PATH/scripts/runtime-assets.bash"
+        formula="$(php_ci_static_homebrew_formula "$PHP_VERSION")"
 
         if ! brew list --versions "$formula" >/dev/null 2>&1; then
           brew install "$formula"
@@ -361,26 +327,11 @@ runs:
 
         BIN="$RUNNER_TEMP/php-ci-static/bin"
         rm -rf "$BIN"
-        mkdir -p "$BIN"
-        curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL \
-          -o "$BIN/composer" https://getcomposer.org/composer-stable.phar
-        chmod +x "$BIN/composer"
         echo "$php_bin" >> "$GITHUB_PATH"
-        echo "$BIN" >> "$GITHUB_PATH"
-        export PATH="$BIN:$php_bin:$PATH"
+        export PATH="$php_bin:$PATH"
+        php_ci_static_install_composer "$BIN"
 
-        echo "::group::php -v"
-        php -v
-        echo "::endgroup::"
-        echo "::group::php -m"
-        php -m
-        echo "::endgroup::"
-        echo "::group::php --ini"
-        php --ini
-        echo "::endgroup::"
-        echo "::group::composer --version"
-        composer --version
-        echo "::endgroup::"
+        php_ci_static_diagnostics
 
     - name: Save runtime cache
       id: save-runtime-cache

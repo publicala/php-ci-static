@@ -46,7 +46,7 @@ jobs:
     outputs:
       release_paths: ${{ steps.filter.outputs.release_paths }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -84,7 +84,7 @@ jobs:
     name: Lint tooling
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
@@ -101,7 +101,7 @@ jobs:
     container:
       image: php:7.4.33-cli-bullseye@sha256:620a6b9f4d4feef2210026172570465e9d0c1de79766418d3affd09190a7fda5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - id: setup
         uses: ./
@@ -124,7 +124,7 @@ jobs:
     name: Homebrew PHP 8.5 on macOS
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - id: setup
         uses: ./
@@ -145,8 +145,17 @@ jobs:
   managed-runtime-validation:
     name: Managed runtime validation
     runs-on: depot-ubuntu-24.04
+    container:
+      image: php:8.3.33-cli-bookworm@sha256:177529735599a8244b2c903522f029839dce1c2ac4be122fdc00ada4b45a20e4
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+
+      - name: Assert the system runtime is PHP 8.3
+        run: |
+          php -r 'exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 3 ? 0 : 1);'
 
       - name: Reject a system PHP version mismatch
         id: wrong-system-version
@@ -166,6 +175,15 @@ jobs:
           php-version: '8.4'
           runtime: system
           coverage: pcov
+
+      - name: Reject PHP 7.4 for a static runtime
+        id: static-php74
+        # pla-stack:allow-continue-on-error negative test. The final step asserts this failure.
+        continue-on-error: true
+        uses: ./
+        with:
+          php-version: '7.4'
+          runtime: static
 
       - name: Reject Homebrew on Linux
         id: homebrew-linux
@@ -189,6 +207,7 @@ jobs:
         env:
           WRONG_SYSTEM_VERSION: ${{ steps.wrong-system-version.outcome }}
           SYSTEM_COVERAGE: ${{ steps.system-coverage.outcome }}
+          STATIC_PHP74: ${{ steps.static-php74.outcome }}
           HOMEBREW_LINUX: ${{ steps.homebrew-linux.outcome }}
           UNKNOWN_RUNTIME: ${{ steps.unknown-runtime.outcome }}
         run: |
@@ -196,6 +215,7 @@ jobs:
           for outcome in \
             "$WRONG_SYSTEM_VERSION" \
             "$SYSTEM_COVERAGE" \
+            "$STATIC_PHP74" \
             "$HOMEBREW_LINUX" \
             "$UNKNOWN_RUNTIME"; do
             [[ "$outcome" == 'failure' ]] \
@@ -211,7 +231,7 @@ jobs:
         php: ['8.3', '8.4', '8.5']
         cov: [none, pcov, xdebug]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./
         with:
@@ -264,7 +284,7 @@ jobs:
     name: runtime cache can be reused
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - id: first
         uses: ./
@@ -294,7 +314,7 @@ jobs:
     name: ini-values composes with coverage
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./
         with:
@@ -324,7 +344,7 @@ jobs:
     name: ini-values requesting JIT composes with a coverage driver
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Regression cover for the version-probe startup-warning fix (rationale
       # on php_ci_static_php_probe in scripts/runtime-assets.bash): pcov
@@ -376,7 +396,7 @@ jobs:
     name: ini-values preserves commas inside values
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./
         with:
@@ -401,7 +421,7 @@ jobs:
     name: ini-values supports quoted values (setup-php compat)
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./
         with:
@@ -429,7 +449,7 @@ jobs:
     name: ini-values preserves apostrophes inside values
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./
         with:
@@ -456,7 +476,7 @@ jobs:
     name: ini-values rejects malformed input
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Bad directive name fails validation
         id: bad
@@ -476,7 +496,7 @@ jobs:
     name: setup-php-vendor cache-key has runner-os/php-version/hash shape
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Seed deterministic composer fixtures
         run: |
@@ -516,7 +536,7 @@ jobs:
     name: setup-php-vendor php-version partitions the key
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - run: |
           echo '{"name":"pub/fixture"}' > composer.json
@@ -550,7 +570,7 @@ jobs:
     name: setup-php-vendor honors dependency-path
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Seed fixture in a non-root location
         run: |
@@ -593,7 +613,7 @@ jobs:
     name: setup-php-vendor fails when dependency-path matches nothing
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - id: bad
         # pla-stack:allow-continue-on-error negative test. This step is meant to fail. The next step asserts steps.bad.outcome == failure
@@ -612,7 +632,7 @@ jobs:
     name: setup-php-vendor fail-on-cache-miss=true fails on miss
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Unique-per-run hash so the cache cannot hit.
       - name: Seed unique fixture
@@ -637,7 +657,7 @@ jobs:
     name: setup-php-vendor passes ini-values through to php-ci-static
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - run: |
           echo '{"name":"pub/fixture"}' > composer.json
@@ -688,7 +708,7 @@ jobs:
     needs: changes
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check top header shape
         run: |
@@ -709,7 +729,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: depot-ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need both PR head and base for the diff and the base-CHANGELOG read.
           fetch-depth: 0
@@ -839,7 +859,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history + tags so we can peel vX.Y.Z to its commit locally.
           fetch-depth: 0
