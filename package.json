@@ -15,5 +15,8 @@
     "lefthook": "^1.13.6",
     "prettier": "^3.8.3",
     "shellcheck": "^3.1.0"
+  },
+  "overrides": {
+    "decompress": "npm:@xhmikosr/decompress@^11.1.4"
   }
 }
