@@ -362,10 +362,10 @@ jobs:
           fi
 
           # Repoint the channel for this series at the release just published, but
-          # never regress it. A re-run or a cached older source can build an older
-          # patch than the channel already serves (the built version is whatever
-          # spc produced, not a function of the checked-out commit), so advance
-          # only. A non-php-* pointer (the latest-* seed) always advances.
+          # never regress it. Re-running an older workflow run builds the patch
+          # its plan resolved back then, which can be older than the patch the
+          # channel already serves, so advance only. A pointer that names no
+          # php-* release always advances.
           #
           # Matrix arms each write a different file (channels/8.3, 8.4, 8.5) but
           # commit to the same channels ref, so a sibling arm can move the branch
