@@ -9,21 +9,48 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/build.yml'
-  # Weekly catch-up to pick up new PHP patches (8.3.x, 8.4.x, 8.5.x)
-  # and SPC nightly updates without anyone touching the repo.
+      - 'scripts/build-plan.bash'
+  # Polls php.net and builds a new PHP patch within hours of its release.
+  # Runs with nothing new to build finish after the plan job.
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '17 */4 * * *'
 
 permissions:
   contents: write
 
+# Queue instead of cancelling: an idle scheduled run must never cancel a
+# build that is publishing a release.
 concurrency:
   group: build
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve the newest PHP patches
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          source scripts/build-plan.bash
+          matrix="$(php_ci_static_build_matrix "$EVENT" 8.3 8.4 8.5)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Build matrix: $matrix"
+
   build:
-    name: PHP ${{ matrix.php_version }}
+    name: PHP ${{ matrix.version }}
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
     # PHP compilation is CPU-bound. -16 keeps each matrix arm under ~10 min
     # versus ~30 on base. Per pla-stack sizing policy.
     runs-on: depot-ubuntu-24.04-16
@@ -31,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php_version: ['8.3', '8.4', '8.5']
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       # Link against glibc instead of musl. musl static binaries
       # cannot dlopen shared extensions (it has no dlopen impl).
@@ -73,12 +100,14 @@ jobs:
           path: |
             downloads
             source
-          key: spc-${{ matrix.php_version }}-${{ hashFiles('.github/workflows/build.yml') }}
+          # spc reuses any cached php-src whatever --with-php asks for, so the
+          # key carries the exact patch. Library sources refresh with it.
+          key: spc-${{ matrix.version }}-${{ hashFiles('.github/workflows/build.yml') }}
 
       - name: Download sources
         run: |
           ./spc download \
-            --with-php=${{ matrix.php_version }} \
+            --with-php=${{ matrix.version }} \
             --for-extensions="$SPC_STATIC_EXTENSIONS,$SPC_SHARED_EXTENSIONS" \
             --prefer-pre-built
 
@@ -117,8 +146,14 @@ jobs:
 
       - name: Capture exact PHP version
         id: ver
+        env:
+          PLANNED: ${{ matrix.version }}
         run: |
           exact=$(./buildroot/bin/php -r 'echo PHP_VERSION;')
+          if [[ "$exact" != "$PLANNED" ]]; then
+            echo "::error::built PHP $exact, but the plan resolved PHP $PLANNED as the newest patch. Refusing to publish a stale binary."
+            exit 1
+          fi
           echo "exact=$exact" >> "$GITHUB_OUTPUT"
           echo "Built PHP $exact"
 
@@ -142,7 +177,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: php-${{ matrix.php_version }}-linux-x86_64-${{ steps.ver.outputs.exact }}
+          name: php-${{ matrix.series }}-linux-x86_64-${{ steps.ver.outputs.exact }}
           path: dist/
           if-no-files-found: error
 
@@ -152,7 +187,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: php-${{ steps.ver.outputs.exact }}
           EXACT: ${{ steps.ver.outputs.exact }}
-          SERIES: ${{ matrix.php_version }}
+          SERIES: ${{ matrix.series }}
           EXTENSIONS_LIST: ${{ env.SPC_STATIC_EXTENSIONS }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

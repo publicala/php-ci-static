@@ -314,7 +314,7 @@ Releases are cut automatically by `.github/workflows/release.yml`: bumping the t
 
 ## Build
 
-Matrix of 8.3 / 8.4 / 8.5 on `depot-ubuntu-24.04-16`, triggered by `workflow_dispatch`, a weekly cron, or any push to `main` that touches `.github/workflows/build.yml`. Each successful run publishes an immutable `php-<version>` release (a no-op if that patch is already published) and repoints `channels/<series>` at it.
+A plan job asks php.net for the newest patch of 8.3, 8.4, and 8.5, then builds each one on `depot-ubuntu-24.04-16`. A cron polls every four hours and builds only the patches that have no published release yet, so a PHP security release ships within hours. `workflow_dispatch` and any push to `main` that touches `.github/workflows/build.yml` or `scripts/build-plan.bash` rebuild every series. The build fails if the binary does not report the planned patch. Each successful run publishes an immutable `php-<version>` release (a no-op if that patch is already published) and repoints `channels/<series>` at it.
 
 ## Scope
 
