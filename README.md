@@ -225,7 +225,7 @@ Every build publishes one immutable release per PHP patch, tagged `php-<version>
 - `channels/8.4` points at the newest `php-8.4.*` release
 - `channels/8.5` points at the newest `php-8.5.*` release
 
-The organization enforces immutable releases, so binaries can no longer be overwritten in place. Publishing each patch as its own immutable release (and sliding a tiny text pointer instead of the assets) keeps "latest" working while every published binary stays tamper-proof and verifiable. The pre-immutability `latest-8.x` releases are frozen. The action falls back to them only if the pointer is unreachable.
+The organization enforces immutable releases, so binaries can no longer be overwritten in place. Publishing each patch as its own immutable release (and sliding a tiny text pointer instead of the assets) keeps "latest" working while every published binary stays tamper-proof and verifiable. The action fails when it cannot read the pointer, so it never installs an older patch than the channel serves.
 
 Each release publishes raw assets, zstd-compressed copies, and a checksum file:
 
