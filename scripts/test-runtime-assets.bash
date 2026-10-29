@@ -248,6 +248,17 @@ test_resolve_release_base_fails_when_pointer_unreachable() {
   unset PHP_CI_STATIC_POINTER_BASE
 }
 
+test_resolve_release_base_rejects_trailing_garbage() {
+  make_case pointer-garbage
+  printf 'https://github.com/publicala/php-ci-static/releases/download/php-8.3.99https://github.com\n' > "$case_dir/8.3"
+
+  export PHP_CI_STATIC_POINTER_BASE="file://$case_dir"
+  assert_fails \
+    "a pointer with anything after the patch version should be rejected" \
+    php_ci_static_resolve_release_base 8.3
+  unset PHP_CI_STATIC_POINTER_BASE
+}
+
 test_resolve_release_base_rejects_frozen_latest_release() {
   make_case pointer-latest
   printf 'https://github.com/publicala/php-ci-static/releases/download/latest-8.3\n' > "$case_dir/8.3"
@@ -286,6 +297,7 @@ test_resolve_release_base_reads_channel_pointer
 test_resolve_release_base_rejects_series_mismatch
 test_resolve_release_base_fails_when_pointer_unreachable
 test_resolve_release_base_rejects_frozen_latest_release
+test_resolve_release_base_rejects_trailing_garbage
 test_php_probe_prepends_both_stdout_closing_flags
 
 echo "runtime asset helper tests passed"
