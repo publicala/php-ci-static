@@ -123,8 +123,7 @@ runs:
       run: |
         set -euo pipefail
 
-        # Pointer resolution, the latest-X.Y fallback, and the same-series
-        # guard live with the shared resolver, which install-php.bash also
+        # Pointer resolution and the same-series guard live with the shared resolver, which install-php.bash also
         # uses. The installed binary is additionally asserted below.
         # shellcheck disable=SC1090,SC1091
         source "$GITHUB_ACTION_PATH/scripts/runtime-assets.bash"
@@ -258,7 +257,7 @@ runs:
         export PHP_INI_SCAN_DIR="$CONFD"
 
         # Assert the installed binary is the requested series, regardless of how
-        # BASE resolved. Catches a mispointed channel or a wrong-series fallback
+        # BASE resolved. Catches a mispointed channel
         # before any consumer step runs against the wrong PHP. The probe helper
         # keeps startup warnings (e.g. pcov disabling a requested JIT) off
         # stdout, where one would land inside this command substitution and

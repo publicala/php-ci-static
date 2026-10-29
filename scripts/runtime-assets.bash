@@ -76,42 +76,40 @@ php_ci_static_php_probe() {
 
 # Resolve the current immutable release for a PHP series from the channel
 # pointer. The organization enforces immutable releases, so binaries ship as
-# one release per patch (php-X.Y.Z) and the pointer names the newest. Falls
-# back to the frozen latest-X.Y release if the pointer cannot be reached, so
-# a transient raw.githubusercontent outage still yields a working,
-# checksum-verified binary. Prints the release base URL on stdout.
+# one release per patch (php-X.Y.Z) and the pointer names the newest. Fails
+# when the pointer cannot be read, so an outage never installs an older,
+# possibly vulnerable patch. Prints the release base URL on stdout.
 # PHP_CI_STATIC_POINTER_BASE overrides the pointer location (tests, forks).
 php_ci_static_resolve_release_base() {
   local php_version="$1"
   local pointer_base="${PHP_CI_STATIC_POINTER_BASE:-https://raw.githubusercontent.com/publicala/php-ci-static/channels}"
   local pointer="${pointer_base}/${php_version}"
-  local base
+  local base pointer_file
+
+  # Download to a file and check the exit status, since a retry truncates
+  # the file but appends to a pipe.
+  pointer_file="$(mktemp)"
+  if ! curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL -o "$pointer_file" "$pointer" 2>/dev/null; then
+    rm -f "$pointer_file"
+    php_ci_static_error "could not read the channel pointer ${pointer}. Re-run the job. If this repeats, check that channels/${php_version} exists and is reachable."
+    return 1
+  fi
 
   # tr strips a trailing CR or stray whitespace so a pointer hand-edited via
   # the GitHub web UI (which writes CRLF) does not slip a \r into the URL.
-  base="$(curl --retry 3 --retry-delay 2 --retry-all-errors -fsSL "$pointer" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
-  if [[ -z "$base" ]]; then
-    # The pointer was unreachable (a transient raw.githubusercontent outage,
-    # or a deleted/empty channels/<series> file). Fall back to the frozen
-    # pre-immutability release so the caller still gets a checksum-verified
-    # binary, and warn that a persistent failure means a stale install.
-    php_ci_static_warn "could not resolve channel pointer ${pointer}. Falling back to the frozen latest-${php_version} release, so the installed PHP may be an older patch. If this repeats, check that channels/${php_version} exists and is reachable."
-    base="https://github.com/publicala/php-ci-static/releases/download/latest-${php_version}"
-  fi
+  base="$(head -n1 "$pointer_file" | tr -d '[:space:]')"
+  rm -f "$pointer_file"
 
-  # Constrain the base to this repo's release downloads for the requested
-  # series. A pointer that resolves anywhere else, or to a different PHP
-  # series (e.g. channels/8.4 pointing at php-8.3.x), is rejected rather
-  # than fetched. Callers also assert the installed binary's version.
-  local dl="https://github.com/publicala/php-ci-static/releases/download"
-  case "$base" in
-    "$dl/php-${php_version}."*) ;;
-    "$dl/latest-${php_version}") ;;
-    *)
-      php_ci_static_error "resolved release base does not match php-version ${php_version}: ${base}"
-      return 1
-      ;;
-  esac
+  # Constrain the base to one php-X.Y.Z release of this repo for the
+  # requested series. A pointer that resolves anywhere else, or to a
+  # different PHP series (e.g. channels/8.4 pointing at php-8.3.x), is
+  # rejected rather than fetched. Callers also assert the installed
+  # binary's version.
+  local release_pattern="^https://github\.com/publicala/php-ci-static/releases/download/php-${php_version//./\\.}\.[0-9]+$"
+  if [[ ! "$base" =~ $release_pattern ]]; then
+    php_ci_static_error "resolved release base does not match php-version ${php_version}: ${base}"
+    return 1
+  fi
 
   printf '%s\n' "$base"
 }

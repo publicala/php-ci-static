@@ -114,7 +114,7 @@ if [[ -n "${PHP_INI_SCAN_DIR:-}" && "${PHP_INI_SCAN_DIR}" != "$conf_dir" ]]; the
 fi
 
 # Assert the installed binary is the requested series, regardless of how the
-# base resolved. Catches a mispointed channel or a wrong-series fallback
+# base resolved. Catches a mispointed channel
 # before the caller runs anything against the wrong PHP. The probe helper
 # keeps startup warnings off stdout, where one would prefix the captured
 # version (reachable straight from this script's own --ini-values); rationale

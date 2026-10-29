@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.9.1
+
+- Fail when the channel pointer cannot be read, in both the composite
+  action and `scripts/install-php.bash`. The frozen `latest-8.x`
+  releases hold PHP 8.3.31, 8.4.21, and 8.5.6, which predate the
+  October 2026 security release (CVE-2026-109618, CVE-2026-109619), so
+  falling back to them could install a vulnerable PHP. The pointer read
+  now retries five times before it fails.
+
 ## v1.9.0
 
 - Add the `runtime` input. The default `static` source keeps the existing
