@@ -989,8 +989,7 @@ jobs:
         run: |
           set -euo pipefail
           # Idempotent: if the sliding tag already points at RELEASE_SHA, no-op.
-          # Otherwise force-move (PATCH) or create (POST). Same shape the build
-          # workflow uses for the latest-X.Y tags.
+          # Otherwise force-move (PATCH) or create (POST).
           current=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/v$MAJOR" --jq .object.sha 2>/dev/null || true)
           if [[ -z "$current" ]]; then
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
