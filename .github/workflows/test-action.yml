@@ -251,6 +251,12 @@ jobs:
           php -v | grep -F "PHP ${MATRIX_PHP}."
           php -r 'exit(extension_loaded("Zend OPcache") ? 0 : 1);'
           php -r 'exit(count(mb_split(",", "a,b,c")) === 3 ? 0 : 1);'
+          # The type map the action exports lets Imagick draw SVG text: the internal
+          # MSVG coder loads the map and the text changes pixels.
+          [[ -f "$RUNNER_TEMP/php-ci-static/magick/type.xml" ]] \
+            || { echo "::error::type.xml missing from $RUNNER_TEMP/php-ci-static/magick"; exit 1; }
+          # shellcheck disable=SC2016 # PHP code, not shell: $svg is PHP's.
+          php -r '$svg = new Imagick; $svg->setBackgroundColor("white"); $svg->setFormat("MSVG"); $svg->readImageBlob("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><text y=\"40\">Aé😀</text></svg>"); exit(count(Imagick::queryFonts("php-ci-static-default")) === 1 && $svg->getImageColors() > 1 ? 0 : 1);'
 
           case "$MATRIX_COV" in
             pcov)

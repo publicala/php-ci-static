@@ -37,6 +37,58 @@ php_ci_static_diagnostics() {
   echo "::endgroup::"
 }
 
+# A TrueType font on this machine, for ImageMagick. The static build reads no
+# fontconfig, so without a font in its type map an SVG <text> fails with
+# UnableToReadFont (ImageMagick 7.1.2-36 and later; earlier ones skipped the text).
+php_ci_static_find_font() {
+  local candidate
+
+  for candidate in \
+    /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+    /usr/share/fonts/dejavu/DejaVuSans.ttf; do
+    if [[ -f "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v fc-match >/dev/null 2>&1; then
+    candidate="$(fc-match -f '%{file}' sans-serif 2>/dev/null || true)"
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Writes an ImageMagick type map into $dir that names a copy of $font as its
+# only font, which ImageMagick then draws all text with. MAGICK_CONFIGURE_PATH
+# names $dir. ImageMagick reads the glyphs path literally, without decoding
+# XML entities, so the copy gets a fixed plain name (FreeType reads the format
+# from the bytes, not the name) and $dir must need no escaping.
+php_ci_static_render_magick_type_map() {
+  local font="$1"
+  local dir="$2"
+  local copy="$dir/default-font.ttf"
+
+  if [[ "$dir" == *[\&\<\>\"]* ]]; then
+    php_ci_static_warn "cannot map a font for ImageMagick under $dir: the path holds a character XML would have to escape"
+    return 1
+  fi
+
+  # Explicit returns: a caller testing this in a condition turns off errexit here.
+  mkdir -p "$dir" || return 1
+  cp "$font" "$copy" || return 1
+  cat > "$dir/type.xml" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<typemap>
+  <type name="php-ci-static-default" family="sans-serif" style="Normal" stretch="Normal" weight="400" glyphs="$copy"/>
+</typemap>
+XML
+}
+
 # Emit as GitHub workflow annotations inside Actions, plain text elsewhere,
 # so the same helpers serve the composite action and install-php.bash.
 php_ci_static_warn() {

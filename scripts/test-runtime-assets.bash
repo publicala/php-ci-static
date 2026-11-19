@@ -270,6 +270,28 @@ test_resolve_release_base_rejects_frozen_latest_release() {
   unset PHP_CI_STATIC_POINTER_BASE
 }
 
+test_render_magick_type_map_names_a_plain_copy_of_the_font() {
+  make_case render-magick-type-map
+  printf 'font bytes' > "$case_dir/A&B <x>.ttf"
+
+  php_ci_static_render_magick_type_map "$case_dir/A&B <x>.ttf" "$case_dir/magick"
+
+  assert_file_equals "$case_dir/magick/default-font.ttf" 'font bytes'
+  assert_file_equals "$case_dir/magick/type.xml" "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<typemap>
+  <type name=\"php-ci-static-default\" family=\"sans-serif\" style=\"Normal\" stretch=\"Normal\" weight=\"400\" glyphs=\"$case_dir/magick/default-font.ttf\"/>
+</typemap>"
+}
+
+test_render_magick_type_map_refuses_a_dir_xml_would_escape() {
+  make_case render-magick-type-map-escape
+  printf 'font bytes' > "$case_dir/font.ttf"
+
+  assert_fails "a type map under a path with & should be refused: ImageMagick reads glyphs without decoding entities" \
+    php_ci_static_render_magick_type_map "$case_dir/font.ttf" "$case_dir/A&B"
+  [[ ! -e "$case_dir/A&B/type.xml" ]] || fail "a refused type map should not be written"
+}
+
 test_php_probe_prepends_both_stdout_closing_flags() {
   make_case php-probe
   local stub="$case_dir/php-stub"
@@ -283,6 +305,8 @@ test_php_probe_prepends_both_stdout_closing_flags() {
     "probe should run the given binary with both stdout-closing flags before caller arguments"
 }
 
+test_render_magick_type_map_names_a_plain_copy_of_the_font
+test_render_magick_type_map_refuses_a_dir_xml_would_escape
 test_raw_download_path
 test_zstd_download_path
 test_corrupt_compressed_asset_fails

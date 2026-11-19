@@ -251,6 +251,21 @@ runs:
         # picked up so memory_limit isn't stuck at the binary's 128M default.
         echo "PHP_INI_SCAN_DIR=$CONFD" >> "$GITHUB_ENV"
 
+        # Imagick's ImageMagick reads no fontconfig, so it gets the runner's
+        # font through a type map, or an SVG <text> fails with UnableToReadFont.
+        if ! font="$(php_ci_static_find_font)"; then
+          php_ci_static_warn "no TrueType font found on the runner: Imagick cannot draw SVG text (UnableToReadFont). Install fonts-dejavu-core to fix it."
+        elif php_ci_static_render_magick_type_map "$font" "$ROOT/magick"; then
+          # A second run in the same job finds its own entry already exported.
+          case ":${MAGICK_CONFIGURE_PATH:-}:" in
+            *":$ROOT/magick:"*) ;;
+            # "+", not ":+": a set but empty value means the working directory, which stays searched.
+            *) MAGICK_CONFIGURE_PATH="${MAGICK_CONFIGURE_PATH+$MAGICK_CONFIGURE_PATH:}$ROOT/magick" ;;
+          esac
+          echo "MAGICK_CONFIGURE_PATH=$MAGICK_CONFIGURE_PATH" >> "$GITHUB_ENV"
+          export MAGICK_CONFIGURE_PATH
+        fi
+
         # $GITHUB_PATH and $GITHUB_ENV only apply to *subsequent* steps, so
         # re-export locally to make these diagnostics meaningful.
         export PATH="$BIN:$PATH"
