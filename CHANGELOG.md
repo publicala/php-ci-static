@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.9.2
+
+- Let Imagick draw SVG text. ImageMagick 7.1.2-36, in the `php-8.4.28`
+  release, refuses to draw text it has no font for (`UnableToReadFont`),
+  where 7.1.2-34 skipped it, and the static build reads no fontconfig. The
+  action now maps the runner's DejaVu Sans (or the font `fc-match` names
+  for `sans-serif`) in an ImageMagick `type.xml` and exports
+  `MAGICK_CONFIGURE_PATH`, so every published release draws SVG text again
+  without a rebuild. A runner with no font gets a warning.
+
+- Check SVG text in the release build: "Verify static binary" now draws an
+  SVG `<text>` through that type map, so a release whose ImageMagick cannot
+  draw text fails before it ships.
+
 ## v1.9.1
 
 - Fail when the channel pointer cannot be read, in both the composite

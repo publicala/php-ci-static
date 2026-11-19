@@ -254,6 +254,8 @@ sockets     sodium      sqlite3     tokenizer   xml
 xmlreader   xmlwriter   zip         zlib
 ```
 
+`imagick` draws SVG text with the runner's DejaVu Sans, which the action maps for ImageMagick through `MAGICK_CONFIGURE_PATH`: the static build reads no fontconfig. A runner without that font, or any font `fc-match` names, gets a warning, and Imagick then fails on SVG text with `UnableToReadFont`.
+
 `mbstring` ships with oniguruma support enabled, so `mb_split`, `mb_ereg`, `mb_ereg_match`, and friends all work. Laravel's `Illuminate\Support\Str` depends on this.
 
 ### Shared (downloaded separately)

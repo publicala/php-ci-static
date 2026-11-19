@@ -132,6 +132,20 @@ jobs:
           # by calling mb_split. Laravel's Str helpers depend on this.
           ./buildroot/bin/php -r 'exit(function_exists("mb_split") && count(mb_split(",", "a,b,c")) === 3 ? 0 : 1);'
           ./buildroot/bin/php -r 'exit(extension_loaded("imagick") && class_exists("Imagick") ? 0 : 1);'
+          # Imagick draws an SVG <text> with the font the action maps for it: the
+          # internal MSVG coder loads the map and the text changes pixels.
+          # ImageMagick 7.1.2-36 started refusing text it has no font for.
+          # shellcheck disable=SC1091
+          source scripts/runtime-assets.bash
+          # The runner image need not ship a font, so install the one the action looks for first.
+          font="$(php_ci_static_find_font)" || {
+            sudo apt-get install -y --no-install-recommends fonts-dejavu-core >/dev/null \
+              || { sudo apt-get update >/dev/null && sudo apt-get install -y --no-install-recommends fonts-dejavu-core >/dev/null; }
+            font="$(php_ci_static_find_font)"
+          }
+          php_ci_static_render_magick_type_map "$font" "$RUNNER_TEMP/magick"
+          # shellcheck disable=SC2016 # PHP code, not shell: $svg is PHP's.
+          MAGICK_CONFIGURE_PATH="$RUNNER_TEMP/magick" ./buildroot/bin/php -r '$svg = new Imagick; $svg->setBackgroundColor("white"); $svg->setFormat("MSVG"); $svg->readImageBlob("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><text y=\"40\">Aé😀</text></svg>"); exit(count(Imagick::queryFonts("php-ci-static-default")) === 1 && $svg->getImageColors() > 1 ? 0 : 1);'
 
       - name: Verify shared extensions load
         # xdebug is a Zend extension. pcov is a regular PHP extension.
